@@ -1,0 +1,1248 @@
+---
+title: "Initial analysis"
+date: "2023-04-12"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+# Background
+
+We cleaned the clinical files metadata. Now we analze the NPX data generated. For now focus on the non-serial samples. 
+
+# Objectives
+
+
+
+# Pre-processing 
+
+## Loading packages
+
+```{r, message=FALSE, warning=FALSE}
+library(here)
+library(tidyverse)
+library(readxl)   
+library(readr)
+library(stringr)
+
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(gghighlight)
+library(ggbeeswarm)
+
+
+library(OlinkAnalyze) # install.packages("OlinkAnalyze")
+library(paletteer)
+```
+
+
+## Directories
+
+```{r}
+wd <- list()
+wd$main <- here()
+wd$data <- file.path(wd$main, "data")
+wd$manishData <- file.path(wd$data, "raw/data_fromManish")
+wd$d2024 <- file.path(wd$data, "updated_2024")
+wd$d2024_npx <- file.path(wd$d2024, "NPX_data")
+wd$output <- file.path(wd$main, "output")
+wd$script <- file.path(wd$main, "scripts")
+
+wd$outData <- file.path(wd$output, "data")
+wd$outCurr <- file.path(wd$output, "02_Proteomics")
+
+t.testDir <- file.path(wd$outCurr , "t_test")
+dir.create(t.testDir)
+```
+
+
+Create directories
+
+```{r}
+if (!file.exists(wd$outCurr)) {
+  dir.create(wd$outCurr)
+} else {
+  print("Directory already exists")
+}
+```
+
+Load functions
+
+```{r}
+source(file.path(wd$script, "functions.R"))
+
+theme_custom <- 
+  theme_bw() +
+  theme(panel.grid = element_blank())
+```
+
+Colours
+
+```{r}
+pal.cohort.n <- c("#AEC7E8", "#FFBB78", "#98DF8A")
+pal.cohort.n2 <- c("#ff7f0e", "#1f77b4", "#2ca02c")
+```
+
+
+## Load data
+
+Load the processed metadata file
+
+```{r}
+#df_meta <- read.csv(file.path(wd$outData, "metadata.csv"))
+```
+
+# Objective 1
+
+Load the NPX data. 
+
+Remember that Q-13356 had duplicated samples. We need to remove one of them
+
+## Global overview
+
+We analyse each dataset first
+
+### Psomagen
+
+Select samples where we have clinical data.
+
+```{r}
+df_meta <- df_meta_f %>% 
+  filter(!is.na(sample_id_psom)) %>% 
+  # remove serial samples
+  #filter(serial_sample == 1) %>% 
+  dplyr::rename(SampleID = sample_id_psom) %>% 
+  select(cohort, SampleID) %>% 
+  distinct() %>% 
+  mutate(SampleID = as.character(SampleID))
+
+# This removes control samples as well
+dat1_NPX_anno <- dat_NPX %>%
+  mutate(SampleID = as.character(SampleID)) %>% 
+  dplyr::left_join(df_meta) %>%
+  filter(!is.na(cohort))
+```
+
+Quick PCA 
+
+```{r}
+p_pca <-
+  dat1_NPX_anno %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+
+
+pca_cor <- p_pca[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>% 
+  #Combine with master annotation
+  left_join(df_meta)
+
+
+ggplot(pca_cor, aes(x=PC1, y=PC2, colour=cohort)) +
+  geom_point(size=2.5) +
+  ylab(p_pca[[1]]$labels$y) +
+  xlab(p_pca[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort) +
+  NULL
+```
+
+### Q-13356
+
+Select samples where we have clinical data.
+
+```{r}
+df_meta2 <- df_meta_f %>% 
+  filter(!is.na(sample_id_Q13356)) %>% 
+  # remove serial samples
+  #filter(!HCI_cID %in% serial_sam) %>% 
+  dplyr::rename(SampleID = sample_id_Q13356) %>% 
+  select(cohort, SampleID) %>% 
+  distinct() %>% 
+  mutate(SampleID = as.character(SampleID))
+
+# This removes conttol samples as well
+dat2_NPX_anno <- dat_NPX2 %>%
+  mutate(SampleID = as.character(SampleID)) %>% 
+  dplyr::left_join(df_meta2) %>%
+  filter(!is.na(cohort))
+```
+
+Run PCA
+
+```{r}
+p_pca2 <-
+  dat2_NPX_anno %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+
+
+pca_cor2 <- p_pca2[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>% 
+  #Combine with master annotation
+  left_join(df_meta2) %>% 
+  mutate(dupe = if_else(SampleID %in% c(34,78), "Y", "N"))
+  
+
+
+ggplot(pca_cor2, aes(x=PC1, y=PC2, colour=cohort)) +
+  geom_point(size=2.5) +
+  ylab(p_pca2[[1]]$labels$y) +
+  xlab(p_pca2[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort[2:3]) +
+  NULL
+
+```
+
+Plot the supposed duplicates
+
+```{r}
+ggplot(pca_cor2, aes(x=PC1, y=PC2, colour=dupe, label=SampleID)) +
+  geom_point(size=2.5) +
+  geom_text_repel() +
+  ylab(p_pca2[[1]]$labels$y) +
+  xlab(p_pca2[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_color_manual(values=c("grey50", "red")) +
+  NULL
+```
+### Q-15806
+
+Select samples where we have clinical data.
+
+```{r}
+df_meta3 <- df_meta_f %>% 
+  filter(!is.na(sample_id_Q15806)) %>% 
+  # remove serial samples
+  #filter(!HCI_cID %in% serial_sam) %>% 
+  dplyr::rename(SampleID = sample_id_Q15806) %>% 
+  select(cohort, SampleID) %>% 
+  distinct() %>% 
+  mutate(SampleID = as.character(SampleID))
+
+# This removes conttol samples as well
+dat3_NPX_anno <- dat_NPX3 %>%
+  mutate(SampleID = as.character(SampleID)) %>% 
+  dplyr::left_join(df_meta3) %>%
+  filter(!is.na(cohort))
+```
+
+Run PCA
+
+```{r}
+p_pca3 <-
+  dat3_NPX_anno %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+
+
+pca_cor3 <- p_pca3[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>% 
+  #Combine with master annotation
+  left_join(df_meta3)
+  
+
+
+ggplot(pca_cor3, aes(x=PC1, y=PC2, colour=cohort)) +
+  geom_point(size=2.5) +
+  ylab(p_pca3[[1]]$labels$y) +
+  xlab(p_pca3[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort) +
+  NULL
+
+```
+
+
+## Protein overlap
+
+What is the protein overlap in the Psomagen and Q-1335?
+
+Check the overlap using OlinkID 
+
+```{r}
+id_pso <- dat1_NPX_anno %>% pull(OlinkID) %>% unique()
+id_q1335 <- dat2_NPX_anno %>% filter(!str_detect(Assay, "control")) %>%  pull(OlinkID) %>% unique()
+id_q158 <- dat3_NPX_anno %>% filter(!str_detect(Assay, "control")) %>%  pull(OlinkID) %>% unique()
+
+overlap <- calculate.overlap(
+x <- list("Psomagen"=id_pso, 
+          "Q-1335"=id_q1335,
+          "Q-15806"=id_q158
+          ))
+
+ggvenn(
+  x, 
+  fill_color = pal.study,
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+
+# Protein names
+id_pso <- dat1_NPX_anno %>% pull(Assay) %>% unique()
+id_q1335 <- dat2_NPX_anno %>%  filter(!str_detect(Assay, "control")) %>% pull(Assay) %>% unique()
+id_q158 <- dat3_NPX_anno %>%  filter(!str_detect(Assay, "control")) %>% pull(Assay) %>% unique()
+
+overlap <- calculate.overlap(
+x <- list("Psomagen"=id_pso, 
+          "Q-1335"=id_q1335,
+          "Q-15806"=id_q158
+          ))
+
+ggvenn(
+  x, 
+  fill_color = pal.study,
+  stroke_size = 0.5, set_name_size = 4
+  )
+```
+
+Make a table of proteins and OlinkIDs
+
+```{r}
+d1 <- dat1_NPX_anno %>% select(OlinkID, Assay) %>% distinct() %>% 
+  mutate(ID_assay = paste(OlinkID, Assay, sep="_"))
+d2 <- dat2_NPX_anno %>% filter(!str_detect(Assay, "control")) %>% select(OlinkID, Assay) %>% distinct() %>% 
+  mutate(ID_assay = paste(OlinkID, Assay, sep="_"))
+
+d_all <- rbind(d1,d2) %>% distinct()
+
+
+d_all <- d_all %>% 
+  mutate(inPsom = if_else(ID_assay %in% d1$ID_assay, "Y", "N"),
+         inQ1335 = if_else(ID_assay %in% d2$ID_assay, "Y", "N"))
+
+write.csv(d_all, file.path(wd$outCurr, "Proteins_overlap.csv"))
+
+```
+
+We note there are three proteins with mis-match annotation, lets correct this
+
+```{r}
+d_all <- d_all %>% 
+  mutate(
+    Assay = case_when(
+      OlinkID == "OID20125" ~ "NT-proBNP",
+      OlinkID == "OID20857" ~ "CERT1",
+      OlinkID == "OID21084" ~ "WARS1",
+      TRUE ~ Assay))
+  
+# Create a list of Olink paired with protein ID
+df_id_pro <- d_all %>% select(OlinkID, Assay) %>% distinct()
+```
+
+The previous venn tells us that the protein present in the panel. But we want to know what percentage of the proteins are considered expressing. 
+
+
+```{r}
+numSample1 <- length(unique(dat1_NPX_anno$SampleID))
+  
+dat1_missing <- dat1_NPX_anno %>% 
+  group_by(OlinkID) %>% 
+  summarise(PercMissing = (sum(NPX < LOD) / numSample1) * 100) %>% 
+  mutate(Group = "Psomagen")
+
+numSample2 <- length(unique(dat2_NPX_anno$SampleID))
+  
+dat2_missing <- dat2_NPX_anno %>% 
+  filter(!str_detect(Assay, "control")) %>% 
+  group_by(OlinkID) %>% 
+  summarise(PercMissing = (sum(NPX < LOD) / numSample2) * 100) %>% 
+  # If its NA, it is 100 missing
+  mutate(PercMissing = case_when(is.na(PercMissing) ~ 100,
+                                 TRUE ~ PercMissing),
+         Group = "Q-1335")
+  
+numSample3 <- length(unique(dat3_NPX_anno$SampleID))
+  
+dat3_missing <- dat3_NPX_anno %>% 
+  filter(!str_detect(Assay, "control")) %>% 
+  group_by(OlinkID) %>% 
+  summarise(PercMissing = (sum(NPX < LOD) / numSample2) * 100) %>% 
+  # If its NA, it is 100 missing
+  mutate(PercMissing = case_when(is.na(PercMissing) ~ 100,
+                                 TRUE ~ PercMissing),
+         Group = "Q-1580")
+
+# Number of proteins missing 100%
+df_plot <- rbind(dat1_missing, dat2_missing, dat3_missing)
+
+df_mis <- df_plot %>% filter(PercMissing >= 50) %>% 
+  group_by(Group) %>% 
+  summarise(TotalMis = n())
+df_mis
+```
+
+Are these missing proteins the same?
+
+```{r}
+perc_mis <- 100
+m1 <- df_plot %>% filter(Group == "Psomagen" & PercMissing >= perc_mis) %>% pull(OlinkID)
+m2 <- df_plot %>% filter(Group == "Q-1335" & PercMissing >= perc_mis) %>% pull(OlinkID)
+m3 <- df_plot %>% filter(Group == "Q-1580" & PercMissing >= perc_mis) %>% pull(OlinkID)
+
+overlap <- calculate.overlap(
+x <- list("Psomagen"=m1, 
+          "Q-1335"=m2,
+          "Q-15806"=m3
+          ))
+
+ggvenn(
+  x, 
+  fill_color = pal.study,
+  stroke_size = 0.5, set_name_size = 4
+  )
+```
+
+Make a side-by side plot of missingness
+
+```{r}
+ggplot(df_plot, aes(x=Group, y=PercMissing, fill=Group)) +
+    geom_quasirandom(dodge.width=0.9, colour="grey30", alpha=0.5) +
+  scale_fill_manual(values=pal.study) +
+  geom_violin(alpha = 0.5, scale = "width", position = position_dodge(width = 0.9)) +
+  geom_boxplot(outlier.alpha = 0,  width = 0.2, coef=0,
+               position = position_dodge(width = 0.9),
+               alpha = 0.2) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank"),
+        axis.text.x = element_text(angle = 0)) +
+  NULL
+```
+
+
+# Bridging
+
+Lets do bridging analysis. We follow the workflow on Olink website - https://cran.r-project.org/web//packages/OlinkAnalyze/vignettes/bridging_introduction.html
+
+
+The bridging analysis only works with 2 dataset. Because we want to bridge between 3 datasets, we need to do the bridging twice. 
+
+## Q-13356 + Q-15806
+
+Lets do the bridging
+
+```{r}
+xx1 <- dat2_NPX_anno
+xx2 <- dat3_NPX_anno
+
+xx1 <- xx1 %>% 
+  mutate(SampleID = paste0("Q_13356_", SampleID))
+
+xx2 <- xx2 %>% 
+  mutate(SampleID = paste0("Q_15806_", SampleID),)
+
+# Identify bridging samples
+hci_ids_br1 <- df_meta_f %>% filter(Q_13356 == "Y") %>% pull(HCI_cID)
+hci_ids_br2 <- df_meta_f %>% filter(Q_15806 == "Y") %>% pull(HCI_cID)
+int_ids <- intersect(hci_ids_br1, hci_ids_br2)
+
+
+df_ints <- df_meta_f %>% filter(HCI_cID %in% int_ids)
+
+br_1 <- df_ints %>% pull(sample_id_Q13356) %>% paste0("Q_13356_", .)
+br_2 <- df_ints %>% pull(sample_id_Q15806) %>% paste0("Q_15806_", .)
+
+
+overlap_sample_list <-list("DF1" = br_1,
+                           "DF2" = br_2)
+
+xx1.1 <- xx1 #%>% select(SampleID, OlinkID, UniProt, NPX, Panel, cohort)
+xx2.1 <- xx2 #%>% select(SampleID, OlinkID, UniProt, NPX, Panel, cohort)
+
+
+# Perform Bridging normalization
+npx_br_data <- olink_normalization(
+  df1 = xx1.1,
+  df2 = xx2.1,
+  overlapping_samples_df1 = br_1,
+  overlapping_samples_df2 = br_2,
+  df1_project_nr = "data1",
+  df2_project_nr = "data2",
+  reference_project = "data1")
+```
+
+Both method give the same result
+
+Quick PCA analysis
+
+```{r}
+# After bridging analysis  
+npx_after_br <- npx_br_data %>%
+  dplyr::mutate(Type = ifelse(SampleID %in% as.character(unlist(overlap_sample_list)), 
+                              paste0(Project, "_Bridge"),
+                              paste0(Project, "_Sample"))) %>%
+  dplyr:::mutate(SampleID = paste0(Project, SampleID))
+
+### PCA plot seperated by cohort
+p_pca_bridge1 <-
+  npx_after_br %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+```
+
+
+Show the bridging samples
+
+```{r}
+# Generate a matching sample matrix
+# Read matching samples
+mat_sam <- data.frame(
+  SampleID = c(br_1, br_2),
+  Matching = as.character( sprintf("%02d" ,1:nrow(df_ints)) )
+)
+
+# Extract PCA coordinate
+pca_cor_b <- p_pca_bridge1[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>%
+  mutate(Batch = gsub("data1.*", "batch_1", SampleID),
+         Batch = gsub("data2.*", "batch_2", Batch),
+         SampleID = gsub("data1", "", SampleID),
+         SampleID = gsub("data2", "", SampleID)) %>% 
+  # Combine with master annotation
+  left_join(mat_sam)
+
+```
+
+```{r}
+p2 <- 
+  ggplot(pca_cor_b, aes(x=PC1, y=PC2, colour=Batch)) +
+  geom_point() +
+  gghighlight(use_direct_label = FALSE) +
+  theme(legend.position = "right") +
+  facet_wrap(~Matching) +
+  theme_custom +
+  #scale_colour_manual(values=pal.study) + 
+  labs(title="Highlighting the Sequencing batch")
+p2
+```
+
+Plot the cohort
+
+```{r}
+ggplot(pca_cor_b, aes(x=PC1, y=PC2, colour=colors)) +
+  geom_point(size=2.5) +
+  ylab(p_pca_bridge1[[1]]$labels$y) +
+  xlab(p_pca_bridge1[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort) +
+  NULL
+```
+
+
+## Q-13356 + Psomagen
+
+Lets do the bridging
+
+```{r}
+xx1 <- dat2_NPX_anno
+xx2 <- dat1_NPX_anno
+
+xx1 <- xx1 %>% 
+  mutate(SampleID = paste0("Q_13356_", SampleID))
+
+xx2 <- xx2 %>% 
+  mutate(SampleID = paste0("Ps_", SampleID),)
+
+# Identify bridging samples
+hci_ids_br1 <- df_meta_f %>% filter(Q_13356 == "Y") %>% pull(HCI_cID)
+hci_ids_br2 <- df_meta_f %>% filter(Psomagen == "Y") %>% pull(HCI_cID)
+int_ids <- intersect(hci_ids_br1, hci_ids_br2)
+
+df_ints <- df_meta_f %>% filter(HCI_cID %in% int_ids)
+
+br_1 <- df_ints %>% pull(sample_id_Q13356) %>% paste0("Q_13356_", .)
+br_2 <- df_ints %>% pull(sample_id_psom) %>% paste0("Ps_", .)
+
+
+overlap_sample_list <-list("DF1" = br_1,
+                           "DF2" = br_2)
+
+xx1.1 <- xx1 #%>% select(SampleID, OlinkID, UniProt, NPX, Panel, cohort)
+xx2.1 <- xx2 #%>% select(SampleID, OlinkID, UniProt, NPX, Panel, cohort)
+
+# Perform Bridging normalization
+npx_br_data2 <- olink_normalization(
+  df1 = xx1.1,
+  df2 = xx2.1,
+  overlapping_samples_df1 = br_1,
+  overlapping_samples_df2 = br_2,
+  df1_project_nr = "data1",
+  df2_project_nr = "data2",
+  reference_project = "data1")
+```
+
+Quick PCA analysis
+
+```{r}
+# After bridging analysis  
+npx_br_data2 <- npx_br_data2 %>%
+  dplyr::mutate(Type = ifelse(SampleID %in% as.character(unlist(overlap_sample_list)), 
+                              paste0(Project, "_Bridge"),
+                              paste0(Project, "_Sample"))) %>%
+  dplyr:::mutate(SampleID = paste0(Project, SampleID))
+
+### PCA plot seperated by cohort
+p_pca_bridge2 <-
+  npx_br_data2 %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+```
+
+
+Show the bridging samples
+
+```{r}
+# Generate a matching sample matrix
+# Read matching samples
+mat_sam <- data.frame(
+  SampleID = c(br_1, br_2),
+  Matching = as.character( sprintf("%02d" ,1:nrow(df_ints)) )
+)
+
+# Extract PCA coordinate
+pca_cor_b2 <- p_pca_bridge2[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>%
+  mutate(Batch = gsub("data1.*", "batch_1", SampleID),
+         Batch = gsub("data2.*", "batch_2", Batch),
+         SampleID = gsub("data1", "", SampleID),
+         SampleID = gsub("data2", "", SampleID)) %>% 
+  # Combine with master annotation
+  left_join(mat_sam)
+
+```
+
+```{r}
+p2.1 <- 
+  ggplot(pca_cor_b2, aes(x=PC1, y=PC2, colour=Batch)) +
+  geom_point() +
+  gghighlight(use_direct_label = FALSE) +
+  theme(legend.position = "right") +
+  facet_wrap(~Matching) +
+  theme_custom +
+  #scale_colour_manual(values=pal.study) + 
+  labs(title="Highlighting the Sequencing batch")
+p2.1
+```
+
+Plot the cohort
+
+```{r}
+ggplot(pca_cor_b2, aes(x=PC1, y=PC2, colour=colors)) +
+  geom_point(size=2.5) +
+  gghighlight(use_direct_label = FALSE) +
+  facet_wrap(~Batch) +
+  ylab(p_pca_bridge2[[1]]$labels$y) +
+  xlab(p_pca_bridge2[[1]]$labels$x) +
+  theme_custom +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort) +
+  NULL
+```
+
+## Final analysis
+
+Here we bridge across 3 cohorts, We simply combine the bridged NPX values. 
+
+
+```{r}
+b1 <- npx_after_br 
+b2 <- npx_br_data2 %>% filter(!Project == "data1") %>% 
+  mutate(Project = gsub("data2", "data3", Project),
+         SampleID = gsub("data2", "data3", SampleID))
+
+b1_sub <- b1 %>% select(SampleID, OlinkID, Assay, NPX)
+b2_sub <- b2 %>% select(SampleID, OlinkID, Assay, NPX)
+
+npx_all <- rbind(b1_sub, b2_sub)
+
+
+```
+
+Run PCA
+
+```{r}
+### PCA plot
+p_pca_bridge_all <-
+  npx_all %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+```
+
+Show the bridging samples
+
+```{r}
+# Identify bridging samples
+
+# > TO DO - GEnerate a mat_sam
+
+# Extract PCA coordinate
+pca_cor_b_all <- p_pca_bridge_all[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>%
+  mutate(Batch = gsub("data1.*", "Project_2", SampleID),
+         Batch = gsub("data2.*", "Project_4", Batch),
+         Batch = gsub("data3.*", "Psomagen", Batch),
+         SampleID = gsub("data1", "", SampleID),
+         SampleID = gsub("data2", "", SampleID),
+         SampleID = gsub("data3", "", SampleID),
+         ) #%>% 
+  # Combine with master annotation
+ # left_join(mat_sam)
+
+```
+
+```{r}
+p2_all <- 
+  ggplot(pca_cor_b_all, aes(x=PC1, y=PC2, colour=Batch)) +
+  geom_point() +
+  gghighlight(use_direct_label = FALSE) +
+  theme(legend.position = "right") +
+  facet_wrap(~Matching) +
+  theme_custom +
+  #scale_colour_manual(values=pal.study) + 
+  labs(title="Highlighting the Sequencing batch")
+p2_all
+```
+
+Plot the cohort
+
+```{r}
+ggplot(pca_cor_b_all, aes(x=PC1, y=PC2, colour=colors)) +
+  geom_point(size=2.5) +
+  ylab(p_pca_bridge_all[[1]]$labels$y) +
+  xlab(p_pca_bridge_all[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort) +
+  NULL
+
+
+ggplot(pca_cor_b_all, aes(x=PC1, y=PC2, colour=colors)) +
+  geom_point(size=2.5) +
+  gghighlight(use_direct_label = FALSE) +
+  facet_wrap(~Batch) +
+  ylab(p_pca_bridge_all[[1]]$labels$y) +
+  xlab(p_pca_bridge_all[[1]]$labels$x) +
+  theme_custom +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort) +
+  geom_vline(xintercept = 0, linetype="dashed") +
+  NULL
+```
+
+
+Plot based on groups in each cohort
+
+```{r}
+ggplot(pca_cor_b_all, aes(x=PC1, y=PC2, colour=Batch)) +
+  geom_point(size=2) +
+  gghighlight(use_direct_label = FALSE) +
+  geom_vline(xintercept = 0, linetype="dashed") +
+  theme(legend.position = "right") +
+  facet_wrap(~colors) +
+  theme_custom +
+  scale_colour_manual(values=pal.study) + 
+  labs(title="Highlighting the cohort")
+
+ggplot(pca_cor_b_all, aes(x=PC1, y=PC2, colour=colors)) +
+  geom_point(size=2) +
+  gghighlight(use_direct_label = FALSE) +
+  theme(legend.position = "right") +
+  facet_wrap(~Batch) +
+  theme_custom +
+  scale_colour_manual(values=pal.cohort) + 
+  labs(title="Highlighting the Sequencing batch")
+```
+
+
+# Baseline
+
+Lets just show the baseline samples
+
+```{r}
+# Add metadata
+df_meta_id <- data.frame(
+  SampleID = c(
+    paste0("Ps_", df_meta_f$sample_id_psom),
+    paste0("Q_13356_", df_meta_f$sample_id_Q13356),
+    paste0("Q_15806_", df_meta_f$sample_id_Q15806)
+  ),
+  cohort = df_meta_f$cohort,
+  mrn = df_meta_f$mrn,
+  HCI_cID = df_meta_f$HCI_cID,
+  txt_stat = df_meta_f$txt_stat
+) %>% 
+  mutate(txt_stat2 = gsub("[1-2]", "", txt_stat),
+         txt_stat2 = gsub("post", "Post", txt_stat2))
+  
+
+pca_cor_meta <- pca_cor_b_all %>% 
+  left_join(df_meta_id)
+
+
+# Only baseline
+pca_cor_base <- pca_cor_meta %>% 
+  filter(txt_stat2 == "Pre")
+```
+
+
+Subset the npx baseline only
+
+```{r}
+npx_base <- npx_all %>% 
+  mutate(
+    SampleID = gsub("data1", "", SampleID),
+    SampleID = gsub("data2", "", SampleID),
+    SampleID = gsub("data3", "", SampleID)) 
+
+# Run PCA
+p_pca_base <-
+  npx_base %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+
+# Extract PCA coordinate
+p_pca_cor_base <- p_pca_base[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>%
+  mutate(Batch = gsub("data1.*", "Project_2", SampleID),
+         Batch = gsub("data2.*", "Project_4", Batch),
+         Batch = gsub("data3.*", "Psomagen", Batch))
+
+ggplot(p_pca_cor_base, aes(x=PC1, y=PC2, colour=colors)) +
+  geom_point(size=2.5) +
+  ylab(p_pca_base[[1]]$labels$y) +
+  xlab(p_pca_base[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort.n) +
+  NULL
+  
+```
+
+
+
+
+
+
+# Alternate normalization
+
+Long story short - we applied limma linear batch correction, result looks more or less the same with Olink normalization. So lets stick to how olink normalize it
+
+
+```{r}
+xx1 <- dat1_NPX_anno
+xx2 <- dat2_NPX_anno
+xx3 <- dat3_NPX_anno
+```
+
+Convert to gene x matrix
+
+```{r}
+mat_olink1 <- xx1 %>%
+  dplyr::select(SampleID, OlinkID, NPX) %>%
+  # Remove contraol samples
+  dplyr::filter(!str_detect(SampleID, 'CONTROL_SAMPLE')) %>% 
+  # Convert to wide
+  tidyr::pivot_wider(names_from = SampleID, values_from = NPX)
+colnames(mat_olink1)[2:ncol(mat_olink1)] <- paste0("Disc_", colnames(mat_olink1)[2:ncol(mat_olink1)] )
+
+
+mat_olink2 <- xx2 %>%
+  dplyr::select(SampleID, OlinkID, NPX) %>%
+  # Remove contraol samples
+  dplyr::filter(!str_detect(SampleID, 'CONTROL_SAMPLE')) %>% 
+  # Convert to wide
+  tidyr::pivot_wider(names_from = SampleID, values_from = NPX)
+colnames(mat_olink2)[2:ncol(mat_olink2)] <- paste0("Proj2_", colnames(mat_olink2)[2:ncol(mat_olink2)] )
+
+mat_olink3 <- xx3 %>%
+  dplyr::select(SampleID, OlinkID, NPX) %>%
+  # Remove contraol samples
+  dplyr::filter(!str_detect(SampleID, 'CONTROL_SAMPLE')) %>% 
+  # Convert to wide
+  tidyr::pivot_wider(names_from = SampleID, values_from = NPX)
+colnames(mat_olink3)[2:ncol(mat_olink3)] <- paste0("Proj4_", colnames(mat_olink3)[2:ncol(mat_olink3)] )
+```
+
+
+Here we use limma to correct the batch effects. The result is roughly similar. So stick with the olink method.
+
+```{r, eval=FALSE}
+# Create a matrix of just overlapping genes
+int_ol <-
+  Reduce(intersect, list(
+  mat_olink1$OlinkID,
+  mat_olink2$OlinkID,
+  mat_olink3$OlinkID))
+
+m1 <- mat_olink1 %>% as.data.frame()
+rownames(m1) <- m1$OlinkID
+m1 <- m1[int_ol,-1]
+
+m2 <- mat_olink2 %>% as.data.frame()
+rownames(m2) <- m2$OlinkID
+m2 <- m2[int_ol,-1]
+
+m3 <- mat_olink3 %>% as.data.frame()
+rownames(m3) <- m3$OlinkID
+m3 <- m3[int_ol,-1]
+
+
+m_all <- cbind(m1, m2, m3)
+  
+# Define the model formula
+# Generate master replicate sheets
+vector1 <- df_meta_f %>% filter(Psomagen == "Y") %>% pull(HCI_cID)
+vector2 <- df_meta_f %>% filter(Q_13356 == "Y") %>% pull(HCI_cID)
+vector3 <- df_meta_f %>% filter(Q_15806 == "Y") %>% pull(HCI_cID)
+
+# Intersection of any two vectors
+intersection_any <- union(intersect(vector1, vector2), union(intersect(vector1, vector3), intersect(vector2, vector3)))
+
+df_bridge <- df_meta_f %>% 
+  filter(HCI_cID %in% intersection_any) %>% 
+  select(HCI_cID, sample_id_psom, sample_id_Q13356, sample_id_Q15806) %>% 
+  mutate(Rep = as.character( sprintf("%02d" ,1:length(intersection_any))))
+
+df_bridge2 <- data.frame(
+  SampleID = 
+    c(paste(paste0("Disc_", df_bridge$sample_id_psom)),
+      paste(paste0("Proj2_", df_bridge$sample_id_Q13356)),
+      paste(paste0("Proj4_", df_bridge$sample_id_Q15806))),
+  Rep = paste0("Rep_", df_bridge$Rep)) %>% 
+  filter(!str_detect(SampleID, "_NA"))
+
+
+
+meta_data <- data.frame(
+  SampleID = colnames(m_all),
+  Batch = c(
+    rep("Dis", each=ncol(m1)),
+    rep("Proj_2", each=ncol(m2)),
+    rep("Proj_4", each=ncol(m3))
+)) %>% left_join(df_bridge2) %>% 
+  # Create replicate IDs
+  # For technical replicates, use the same ID across runs
+  mutate(ReplicateID = case_when(!is.na(Rep) ~ Rep,
+                                 TRUE ~ SampleID))
+head(meta_data)
+meta_data %>% filter(Rep == "Rep_15")
+
+#colnames(m_all) <- meta_data$ReplicateID
+# Ensure that SampleID matches the columns in counts
+stopifnot(all(meta_data$SampleID == colnames(m_all)))
+
+library(variancePartition)
+
+# Ensure the samples are in the same order
+meta_data <- meta_data[match(colnames(m_all), meta_data$SampleID), ]
+# Verify the order matches
+all(colnames(m_all) == meta_data$SampleID)  # Should return TRUE
+rownames(meta_data) <- meta_data$SampleID
+
+# Set up parallel processing (optional)
+param <- SnowParam(4, "SOCK")  # Adjust the number of cores based on your system
+
+# Define the model formula
+form <- ~ (1 | Batch) + (1 | ReplicateID)
+
+# Fit the model using variancePartition
+varPart <- fitExtractVarPartModel(
+  exprObj = m_all,  # Your expression matrix
+  formula = form,        # The model formula
+  data = meta_data#,      # The metadata dataframe
+  #BPPARAM = param        # Parallel processing parameters
+)
+
+
+design <- model.matrix(~1, data=meta_data)
+corfit <- duplicateCorrelation(m_all, design, block = meta_data$ReplicateID)
+
+# Remove batch effects
+exprMatrix_corrected <- removeBatchEffect(
+  m_all,
+  batch = meta_data$Batch,
+  block = meta_data$ReplicateID,
+  correlation = corfit$consensus
+)
+
+# Remove rows with any NA values
+gene_expression_clean <- m_all[!apply(m_all, 1, function(row) any(is.na(row))), ]
+
+
+# PCA before batch correction
+pca_before <- prcomp(t(gene_expression_clean), scale. = TRUE)
+meta_data$PC1_before <- pca_before$x[,1]
+meta_data$PC2_before <- pca_before$x[,2]
+
+ggplot(meta_data, aes(x = PC1_before, y = PC2_before, color = Batch)) +
+  geom_point(size = 3) +
+  labs(title = "PCA Before Batch Correction") +
+  theme_minimal()
+
+# PCA after batch correction
+gene_expression_clean2 <- exprMatrix_corrected[!apply(exprMatrix_corrected, 1, function(row) any(is.na(row))), ]
+pca_after <- prcomp(t(gene_expression_clean2), scale. = TRUE)
+meta_data$PC1_after <- pca_after$x[,1]
+meta_data$PC2_after <- pca_after$x[,2]
+
+
+ggplot(meta_data, aes(x = PC1_after, y = PC2_after, color = Batch)) +
+  geom_point(size = 3) +
+  labs(title = "PCA Before Batch Correction") +
+  theme_minimal()
+
+t1 <- xx1 %>% select(SampleID, cohort) %>% 
+  mutate(SampleID = paste0("Disc_", SampleID)) %>% distinct()
+t2 <- xx2 %>% select(SampleID, cohort) %>% 
+  mutate(SampleID = paste0("Proj2_", SampleID)) %>% distinct()
+t3 <- xx3 %>% select(SampleID, cohort) %>% 
+  mutate(SampleID = paste0("Proj4_", SampleID)) %>% distinct()
+tt_all <- rbind(t1,t2,t3)
+
+meta_data2 <- meta_data %>% 
+  left_join(tt_all)
+
+
+
+
+
+# Calculate variance explained
+pc_variances <- pca_after$sdev^2
+variance_explained <- pc_variances / sum(pc_variances)
+percent_variance_explained <- variance_explained * 100
+
+
+# Extract variance for PC1 and PC2
+pc1_variance <- percent_variance_explained[1]
+pc2_variance <- percent_variance_explained[2]
+
+# Create labels for plotting
+pc1_label <- paste0("PC1 (", round(pc1_variance, 2), "%)")
+pc2_label <- paste0("PC2 (", round(pc2_variance, 2), "%)")
+
+
+ggplot(meta_data2, aes(x = PC1_after, y = PC2_after, color = cohort)) +
+  geom_point(size = 3) +
+  labs(title = "PCA After Batch Correction") +
+  scale_colour_manual(values=pal.cohort) +
+  theme_custom +
+  xlab(pc1_label) +
+  ylab(pc2_label) 
+```
+
+# Analysis plan
+
+We decided to do the analysis in this way ;
+
+1) Discovery cohort (Psomagen)
+2) Validation cohort (Q-13356 + Q-15806)
+
+Lets get the sample numbers
+
+
+## Tally
+
+Lets get a tally of the number of sample in all projects
+
+### Sample IDs
+
+In the NPX files we are given the ID as "sample_ID". Lets link the sample ID of the NPX with the sample ID in the clinical data.
+
+
+```{r}
+# --- Psomagen cohort ---- #
+# As all sample ID are numbers. We convert it to numeric. Non-number will give NA
+# We stored the Psomagen NPX IDs - b1_noCtrl
+d1.1 <- data.frame(
+  sample_id_psom = as.numeric(b1_noCtrl)
+)
+# Extract the HCI collection ID from clinical files
+d1.2 <- data.frame(
+  HCI_cID = ps_clin.1$`collection_id-hci_id`,
+  sample_id_psom = as.numeric(ps_clin.1$sample_id)
+)
+# Merge the two
+d1 <- left_join(d1.1, d1.2)
+# Santiy check to ensure all NPX data have clinical data, value needs to be 0
+sum(is.na(d1$HCI_cID))
+
+
+# --- Olink Q-13356 cohort ---- #
+# We stored the Q-13356 NPX IDs - b2_noCtrl
+d2.1 <- data.frame(
+  sample_id_Q13356 = as.numeric(b2_noCtrl)
+)
+# Extract the HCI collection ID from clinical files
+# The clinical file also contained a record of a supposed psomagen ID
+d2.2 <- data.frame(
+  HCI_cID = c(q_133_clin.1$`HCI number`, q_133_clin.2$`HCI Number`),
+  sample_id_Q13356 = as.numeric(c(q_133_clin.1$sample_id, q_133_clin.2$sample_id)),
+  sample_id_psom_2 = as.numeric(c(q_133_clin.1$`Sample Id (previous analysis)`, q_133_clin.2$`Sample ID (previous analysis)`))
+)
+# Merge the two
+d2 <- left_join(d2.1, d2.2)
+# Santiy check to ensure all NPX data have clinical data, value needs to be 0
+sum(is.na(d2$HCI_cID))
+```
+
+We noted here that there is one sample missing a clinical ID. We go back to the email from Claire that mentioned the sample "2021-2165" was profiled twice and should have the assigned sample_id : 34 and 78 
+
+```{r}
+filter(d2, is.na(HCI_cID))
+```
+
+We see sample ID 78 is missing clinical data. So we just exclude sample 78 for now
+
+```{r}
+d2 <- d2 %>% 
+  filter(!sample_id_Q13356 == 78)
+```
+
+Repeat for Q-15806
+
+```{r}
+d3 <- q_158_d %>% 
+  select(HCI_cID, sample_id) %>% 
+  mutate(sample_id = as.numeric(sample_id)) %>% 
+  rename(sample_id_Q15806 = sample_id)
+```
+
+Finally, combine all sample IDs
+
+```{r}
+# Combine all the sample IDs
+df_meta_f <- df_cohort %>% 
+  left_join(d1) %>% 
+  left_join(d2) %>% 
+  left_join(d3)
+```
+
+
+
+
+```{r}
+
+```
+
+
+
+
+
+
+Lets do the analysis.
+
+
+
+
+
+
+
+
+
+# NOT DONE
+
+
+
+### Sample number
+
+Final number of samples, excluding the duplicated sampels
+
+```{r}
+df_samp <- pca_cor_b_all %>% 
+  filter(!SampleID %in% dat_sub$sample_id_psom)
+table(df_samp$colors)
+```
+
+
+## Alternate analysis
+
+If we did exclude the outlier, how will it look. 
+
+
+```{r,FALSE}
+p_pca4 <- 
+  npx_after_br %>% 
+  mutate(SampleID = gsub("data1", "", SampleID),
+         SampleID = gsub("data2", "", SampleID)) %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  filter(!SampleID %in% c("Ps_134", "Ps_45", "Ps_161", "Ps_88", "Ps_46",
+                          "Q1335Q_45", "Q1335Q_54", "Q1335Q_77", "Q1335Q_59", "Q1335Q_9", "Q1335Q_76")) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+
+
+
+# Extract PCA coordinate
+p_pca4 <- p_pca4[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>%
+  mutate(Batch = gsub("data1.*", "Psomagen", SampleID),
+         Batch = gsub("data2.*", "Q1335", Batch),
+         SampleID = gsub("data1", "", SampleID),
+         SampleID = gsub("data2", "", SampleID))
+
+kk <- p_pca4 %>% 
+  rename(sample_id = SampleID) %>% 
+  left_join(meta_bridge)
+
+
+
+ggplot(kk, aes(x=PC1, y=PC2, colour=OS)) +
+  geom_point(size=2.5) +
+  ylab(p_pca2[[1]]$labels$y) +
+  xlab(p_pca2[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_viridis_c() +
+  NULL
+
+```
+

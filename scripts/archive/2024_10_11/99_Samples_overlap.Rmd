@@ -1,0 +1,850 @@
+---
+title: "Initial analysis"
+date: "2023-04-12"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+# Background
+
+We have cohort of samples profiled for proteomics, genomics and metylation. We want to create a harmonized clinical file for all these patients.
+
+In regards to proteomics. Samples were profiled ;
+
+1) Psomagen cohort
+2) Olink 2023 cohort (Q-13356)
+3) Olink 2024 cohort
+
+In addition, some patients were also profiled by genomics (KLK2 SNPs) and methylation.
+
+# Objectives
+
+1. Gather data
+2. Clean up clinical data
+3. Summary of data
+
+# Pre-processing 
+
+## Loading packages
+
+```{r, message=FALSE, warning=FALSE}
+library(here)
+library(tidyverse)
+library(readxl)   
+library(readr)
+library(stringr)
+
+library(tidyverse)
+library(ggplot2)
+library(VennDiagram)
+library(ggvenn)
+```
+
+
+## Directories
+
+```{r}
+wd <- list()
+wd$main <- here()
+wd$data <- file.path(wd$main, "data")
+wd$manishData <- file.path(wd$data, "raw/data_fromManish")
+wd$d2024 <- file.path(wd$data, "updated_2024")
+wd$d2024_npx <- file.path(wd$d2024, "NPX_data")
+wd$output <- file.path(wd$main, "output")
+wd$script <- file.path(wd$main, "scripts")
+
+wd$outData <- file.path(wd$output, "data")
+wd$outCurr <- file.path(wd$output, "01_InitialAnalys")
+
+t.testDir <- file.path(wd$outCurr , "t_test")
+dir.create(t.testDir)
+```
+
+
+Create directories
+
+```{r}
+if (!file.exists(wd$outCurr)) {
+  dir.create(wd$outCurr)
+} else {
+  print("Directory already exists")
+}
+```
+
+Load functions
+
+```{r}
+source(file.path(wd$script, "functions.R"))
+```
+
+
+
+# Objective 1
+
+**Gather data**
+
+## Psomagen 
+
+There were 2 files provided by Manish, we detail them here and read into R.
+
+1. **E3072_AN00003660_AN00003661_NPX_2022-04-21-columns**
+
+This file is the NPX values from Olink. Samples are listed in the `SampleID` column
+
+```{r}
+# Read the files
+dat_NPX <- readxl::read_excel(file.path(wd$d2024_npx, "batch_01_E3072_AN00003660_AN00003661_NPX_2022-04-21-columns.xlsx"))
+```
+
+2. **Proteomic Project Clinical file 07_23_24_Combined_ID.xlsx**
+
+This contains the clinical files of Psomagen cohort and Olink Q-13356 cohort
+
+```{r}
+meta_file <- file.path(file.path(wd$d2024, "clinical_data/Proteomic Project Clinical file 06_24_24_Combined_ID_July_01_Enos.xlsx"))
+```
+
+
+### NPX data
+
+Read the NPX data 
+
+**E3072_AN00003660_AN00003661_NPX_2022-04-21-columns**
+
+This file is the NPX values from Olink. 
+
+Get Sample ID (listed in the `SampleID` column)
+
+```{r}
+b1_id <- unique(dat_NPX$SampleID)
+length(b1_id)
+```
+
+There are `length(b1_id)` samples assayed by Olink. This includes "Sample Control" as well, an internal control used by Olink. 
+
+Find the number of samples not including the internal control
+
+```{r}
+b1_noCtrl <- b1_id[!grepl("SC", b1_id)]
+length(b1_noCtrl)
+```
+
+### Clinical data
+
+In the Psomagen cohort, some samples were profiled serially. The excel file contains 2 sheets related the Psomagen cohort, sheets 3 & 4.
+
+Sheet 3 contains only the unique patients IDs per row. It contains all the clinical data, eg - surgery, PSA values, tumor stage, date of death...etc. 
+
+
+While Sheet 4 have the same number of rows as the NPX data. In sheet 4, the same patient with multiple timepoints is represented in multiple rows. There is a column `sample_id` that links to the NPX `sampleID`. 
+
+
+```{r}
+ps_clin.1 <- read_xlsx(meta_file, sheet = 4)
+```
+
+Synonym sample IDs are provided in sheet 3
+
+```{r}
+ps_clin.2 <- read_xlsx(meta_file, sheet = 3)
+```
+
+
+
+## Olink Q-13356 
+
+There were 2 files provided by Manish, we detail them here and read into R.
+
+1. **Q-13356_Kohli_EXTENDED_NPX_2024-03-11**
+
+This file is the NPX values from Olink. Samples are listed in the `SampleID` column
+
+
+2. The same clinical file as above
+
+This contains the clinical files of Psomagen cohort and Olink Q-13356 cohort
+
+
+### NPX data
+
+Read the NPX data. Samples are listed in the `SampleID` column
+
+```{r}
+# Read the files
+dat_NPX2 <- readr::read_delim(file.path(wd$d2024_npx, "batch_02_Q-13356_Kohli_EXTENDED_NPX_2024-03-11.csv"), delim = ";")
+```
+
+Get Sample ID
+
+```{r}
+b2_id <- unique(dat_NPX2$SampleID)
+length(b2_id)
+```
+
+There are `r `length(b2_id)` samples assayed by Olink. This includes "Sample Control" as well, an internal control used by Olink. 
+
+Find the number of samples not including the internal control
+
+```{r}
+b2_noCtrl <- b2_id[!grepl("CONTROL_SAMPLE|NEG_CTRL|PLATE_CTRL", b2_id)]
+length(b2_noCtrl)
+```
+
+### Clinical data
+
+In the this Olink Q-13356 cohort, there are no serial samples. Clinical data is contained in sheet 1 & 2. of the excel files.
+
+Sheets 1 & 2 contains contains all the clinical data, eg - surgery, PSA values, tumor stage, date of death...etc. Sheet 1 is lmited to the CRPC cohort and sheet 2 is limited to HSPC cohort. There is a column `Sample ID (validation)` that links to the NPX `sampleID`.
+
+
+```{r}
+q_133_clin.1 <- read_xlsx(meta_file, sheet = 1) %>% 
+  # Rename columns
+  dplyr::rename(sample_id = 'Sample ID (validation)')
+n1 <- length(unique(q_133_clin.1$`HCI number`)) 
+n1
+```
+
+We repeat reading the clinical data of the HSPC cohort
+
+```{r}
+q_133_clin.2 <- read_xlsx(meta_file, sheet = 2) %>% 
+  # Rename columns
+  dplyr::rename(sample_id = 'Sample ID (validation)')
+n2 <- length(unique(q_133_clin.2$`HCI Number`)) 
+n2
+```
+
+
+Based on the NPX, we have `r length(b2_noCtrl)` samples. Meanwhile in the clinical file, we have `r n1` in CRPC and `r n2` for HSCP. The total in clinical file is `r n1 + n2`.
+
+There is one less patient in the clinical sheet. 
+
+Clarification was given by Claire 
+
+> From: Claire Hanson <Claire.Hanson@hci.utah.edu>   
+> Sent: Thursday, June 20, 2024 9:33 AM.  
+To: Zaki Wilmot <zaki.wilmot@hci.utah.edu>; Manish Kohli <Manish.Kohli@hci.utah.edu>; Enos Ampaw <Enos.Ampaw@hci.utah.edu>   
+> Subject: Re: Overlapping files
+> 
+> Hi Zaki, 
+> 
+> The duplicate sample is 34 and 78 (2021-2165). We used sample ID 34 as one of the bridging samples as well. 
+> 
+>Thanks, 
+Claire 
+
+We will keep this in mind when we process the NPX data
+
+
+
+## Mehtylation data
+
+We obtained methylation data from Liang. In Liang's email to Manish, he mentioned ;
+
+> Hi Manish—I am attaching methylation data matrix with first column as patient IDs and first row as genomic regions (chr_start_end, hg38). Each region is a methylation haplotype block. The content reflects methylation block score (MBS) from each methylation haplotype block. Let me know if additional explanation is needed. Liang
+
+Lets read this data. Note that the IDs here are the HCI collection IDs
+
+```{r}
+dat_met <- read_xlsx(file.path(wd$d2024, "methylation/MBS_mHAPclinical.xlsx"))
+```
+
+
+## Genomics data
+
+### SNP calls
+
+We also have genomic data of a SNP in KLK2 gene. We edited the files Manish gave to make one big excel file of all the patient results. Read this data.
+
+```{r}
+dat_snp <- read_xlsx(file.path(wd$d2024, "genomics/KLK2_results_edit.xlsx"))
+```
+
+
+### Clinical data
+
+Read the clinical data of these patients
+
+```{r}
+snp_clin <- read_xlsx(file.path(wd$d2024, "genomics/KLK2_Study_06_18_24_ID Clinical file.xlsx"),
+                      sheet=2)
+```
+
+
+To note, the unique number of patients are the same in the SNP results and the clinical files
+
+```{r}
+length(unique(snp_clin$`MRN (UUHSC)`))
+length(unique(dat_snp$`HCI number`))
+```
+
+
+# Objective 2
+
+**Clean up clinical data**
+
+We want to combine all data as one df. To make counting and overlapping easier. The unique IDs to merge across these different platforms will be the HCI ID. For the clinical data with mrn & HCI collection ID, we make them into a data frame. 
+
+The methylation has no MRN file associated, so we leave it for now
+
+
+```{r}
+df1 <- data.frame(
+  # MRN
+  mrn = c(ps_clin.1$mrn, # Psomagen
+          q_133_clin.1$`MRN (UUHSC)`, q_133_clin.2$`MRN (UUHSC)`, # Olink Q-13356
+          snp_clin$`MRN (UUHSC)`), # Genotype
+  # HCI collection ID
+  HCI_cID = c(ps_clin.1$`collection_id-hci_id`,  
+              q_133_clin.1$`HCI number`, q_133_clin.2$`HCI Number`,
+              snp_clin$`HCI number`)
+) %>% 
+  # Get unique combinations
+  distinct() %>% 
+  # Remove leading 0
+  mutate(mrn = str_remove(mrn, "^0+")) %>% distinct()
+```
+
+Lets determine if all the samples we collected was also profiled by methylation
+
+```{r}
+filter(dat_met[,1:5], !Samples %in% df1$HCI_cID)
+```
+
+**One** sample was profiled solely by methylation. Lets add this sample
+
+```{r}
+meth_samp <- data.frame(
+  HCI_cID =dat_met$Samples)
+
+df1 <- df1 %>% full_join(meth_samp) %>% distinct()
+
+```
+
+## Cohort info
+
+Now lets add the cohort metadata. We will combine cohort "C" and cohort "D" as one group "C_D".
+
+> Need to find a simplier way to merge the annotations
+
+```{r}
+# For simplicity rename the metadata
+m1 <- ps_clin.1
+m2.1 <- q_133_clin.1
+m2.2 <- q_133_clin.2
+m3 <- snp_clin
+m4 <- dat_met[,1:3]
+
+
+df_meta.full <- data.frame(
+  mrn = c(m1$mrn,
+          m2.1$`MRN (UUHSC)`, m2.2$`MRN (UUHSC)`,
+          m3$`MRN (UUHSC)`, 
+          rep(NA, each=nrow(m4))),
+  # HCI collection ID
+  HCI_cID = c(m1$`collection_id-hci_id`,  
+              m2.1$`HCI number`, m2.2$`HCI Number`,
+              m3$`HCI number`,
+              m4$Samples),
+  cohort = c(m1$cohort,
+             rep("D", nrow(m2.1)), rep("B", nrow(m2.2)),
+             rep(NA, nrow(m3)),
+             m4$Cohort),
+  study = c(rep("Psomagen", each=nrow(m1)),
+            rep("Q-13356", each=nrow(m2.1)), rep("Q-13356", each=nrow(m2.2)),
+            rep("SNP", each=nrow(m3)),
+            rep("Meth", each=nrow(m4))),
+  serial_sample = 
+    c(m1$serial_sample,
+      #rep(1, each=nrow(m2.1)), rep(1, each=nrow(m2.2)),
+      m2.1$`Biobank Collection #`, m2.2$`Biobank collection #`,
+      rep(NA, each=nrow(m3)),
+      m4$Serial)
+) %>%   
+  mutate(
+    #Change cohort to only A,B,C,D. Keep C & D same
+    cohort=case_when(cohort %in% c("B","B*","B**")~"B",
+                      cohort%in% c("C", "D","D*")~"C_D",
+                      TRUE ~ as.character(cohort))) %>% 
+  
+  distinct() 
+
+# Some mrn has leading 0, so remove these
+df_meta.full <- df_meta.full %>% 
+  mutate(mrn = str_remove(mrn, "^0+")) %>% distinct()
+
+
+write.csv(df_meta.full, file.path(wd$outCurr, "MetaData.csv"))
+
+# Because we are not sure what cohort is the SNPs, we exclude these for now
+df_meta.noSNP <- df_meta.full %>% filter(!study == "SNP") %>% distinct() %>% arrange(HCI_cID)
+ 
+
+df_cohort <- df_meta.noSNP %>% 
+  select(HCI_cID:cohort) %>% 
+  distinct()
+  
+```
+
+Check if there are multiple cohort calls for a HCI collection ID
+
+```{r}
+mm <- 
+df_cohort %>% 
+  dplyr::group_by(HCI_cID) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+  dplyr::filter(n > 1L)
+```
+
+
+Lets see what these are
+
+```{r}
+dd <- df_meta.noSNP %>% filter(HCI_cID %in% mm$HCI_cID) %>% arrange(HCI_cID)
+write.csv(dd, file.path(wd$outCurr, "Mismatch_cohorts.csv"))
+```
+
+
+According to the conversation with Manish. The most recent updated clinical files are from his group. So in the case of mis-match between the Olink (Manish group) with Liang (Methylation), we will ignore the cohort information given by Liang.
+
+Lets make a master cohort information sheet
+
+```{r}
+# Get cohort from Manish study
+df_cohort_1 <- df_meta.noSNP %>% 
+  filter(study %in% c("Psomagen", "Q-13356")) %>% 
+  select(HCI_cID:cohort) %>% 
+  distinct()
+
+# Get cohort from Liang study
+# Exclude any cohort information that is contained in Manish
+df_cohort_2 <- df_meta.noSNP %>% 
+  filter(study %in% c("Meth")) %>% 
+  filter(!HCI_cID %in% df_cohort_1$HCI_cID) %>% 
+  select(HCI_cID:cohort) %>% 
+  distinct()
+
+dd <- rbind(df_cohort_1, df_cohort_2)
+
+# Combine with the information from all patient.
+df_cohort_all <- data.frame(
+  HCI_cID = unique(df_meta.full$HCI_cID)) %>% 
+  left_join(dd) %>% distinct()
+  # Missing cohort is from the SNP 
+```
+
+## Serial sample info
+
+
+We also noted that serial sample information may be incorrect
+
+```{r}
+mm2 <- 
+df_meta.noSNP %>% 
+  select(HCI_cID, serial_sample) %>% distinct() %>% 
+  dplyr::group_by(HCI_cID) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+  dplyr::filter(n > 1L)
+```
+
+Lets see what these are
+
+```{r}
+dd <- df_meta.noSNP %>% filter(HCI_cID %in% mm2$HCI_cID) %>% arrange(HCI_cID)
+dd
+write.csv(dd, file.path(wd$outCurr, "Mismatch_serial_samples.csv"))
+```
+
+Chatting with Matt, we know 2021-1149 is serial sample 2. So manually correct this.
+
+> This was corrected manually in the updated excel sheet
+
+## Correcting data 
+
+```{r}
+# df_meta.full <- df_meta.full %>% 
+#   mutate(serial_sample = case_when(HCI_cID == "2021-1149" ~ 2,
+#          TRUE ~ serial_sample))
+```
+
+
+Also since the SNP has no serial information, for sample we have the serial information we put this info. Others we give NA. 
+
+```{r}
+df_nonSNP <- df_meta.full %>% 
+  filter(!study == "SNP") %>% 
+  select(HCI_cID, serial_sample) %>% 
+  distinct()
+
+df_SNP <- df_meta.full %>% 
+  filter(study == "SNP") %>% 
+  filter(!HCI_cID %in% df_nonSNP$HCI_cID) %>% 
+  select(HCI_cID, serial_sample) %>% 
+  distinct()
+
+# Corrected serial metadata
+df_s <- rbind(df_nonSNP, df_SNP)
+
+```
+
+## Final metadata
+
+Lets make a df of the final metadata information. 
+
+```{r}
+# Add mrn to the final data
+# If there is missing mrn, lets create an artificial MRN for those
+
+# Samples with mrn
+mrn_dat <- filter(df1) %>% filter(!is.na(mrn)) %>% distinct()
+
+# Identify data with no MRN
+t1 <- df1 %>% filter(is.na(mrn)) 
+
+# Get numher of samples with missing mrn
+mrn_na <- nrow(t1)
+# Create new id 
+mrn_na_id <- paste0("mrn_", 1:mrn_na)
+
+# Data with mrn
+t2 <- mrn_dat %>% filter(!is.na(mrn))
+
+t1 <- t1 %>% 
+  mutate(mrn = case_when(is.na(mrn) ~ mrn_na_id,
+                         TRUE ~ mrn))
+df_meta_f <- rbind(t1, t2) %>% 
+  left_join(df_cohort_all)
+
+df_meta_f <- df_meta_f %>% left_join(df_s) %>% arrange(HCI_cID)
+```
+
+
+### Platfrom
+
+Now we indicate if the samples was profiled by which technology 
+
+```{r}
+k1 <- df_meta.full %>% filter(study == "Psomagen")
+k2 <- df_meta.full %>% filter(study == "Q-13356")
+k3 <- df_meta.full %>% filter(study == "Meth")
+k4 <- df_meta.full %>% filter(study == "SNP")
+
+df_meta_f <- df_meta_f %>% 
+  mutate(isPsom = if_else(HCI_cID %in% k1$HCI_cID, "Y", "N"),
+         isQ13356 = if_else(HCI_cID %in% k2$HCI_cID, "Y", "N"),
+         isMeth = if_else(HCI_cID %in% k3$HCI_cID, "Y", "N"),
+         isSNP = if_else(HCI_cID %in% k4$HCI_cID, "Y", "N"))
+```
+
+
+### Sample IDs
+
+In the NPX files we are given the ID as "sample_ID". Lets link the sample ID of the NPX with the sample ID in the clinical data.
+
+
+```{r}
+# --- Psomagen cohort ---- #
+# As all sample ID are numbers. We convert it to numeric. Non-number will give NA
+# We stored the Psomagen NPX IDs - b1_noCtrl
+d1.1 <- data.frame(
+  sample_id_psom = as.numeric(b1_noCtrl)
+)
+# Extract the HCI collection ID from clinical files
+d1.2 <- data.frame(
+  HCI_cID = ps_clin.1$`collection_id-hci_id`,
+  sample_id_psom = as.numeric(ps_clin.1$sample_id)
+)
+# Merge the two
+d1 <- left_join(d1.1, d1.2)
+# Santiy check to ensure all NPX data have clinical data, value needs to be 0
+sum(is.na(d1$HCI_cID))
+
+
+# --- Olink Q-13356 cohort ---- #
+# We stored the Q-13356 NPX IDs - b2_noCtrl
+d2.1 <- data.frame(
+  sample_id_Q13356 = as.numeric(b2_noCtrl)
+)
+# Extract the HCI collection ID from clinical files
+# The clinical file also contained a record of a supposed psomagen ID
+d2.2 <- data.frame(
+  HCI_cID = c(q_133_clin.1$`HCI number`, q_133_clin.2$`HCI Number`),
+  sample_id_Q13356 = as.numeric(c(q_133_clin.1$sample_id, q_133_clin.2$sample_id)),
+  sample_id_psom_2 = as.numeric(c(q_133_clin.1$`Sample Id (previous analysis)`, q_133_clin.2$`Sample ID (previous analysis)`))
+)
+# Merge the two
+d2 <- left_join(d2.1, d2.2)
+# Santiy check to ensure all NPX data have clinical data, value needs to be 0
+sum(is.na(d2$HCI_cID))
+```
+
+We noted here that there is one sample missing a clinical ID. We go back to the email from Claire that mentioned the sample "2021-2165" was profiled twice and should have the assigned sample_id : 34 and 78 
+
+```{r}
+filter(d2, is.na(HCI_cID))
+```
+
+We see sample ID 78 is missing clinical data. So we just exclude sample 78 for now
+
+```{r}
+d2 <- d2 %>% 
+  filter(!sample_id_Q13356 == 78)
+```
+
+Finally, combine all sample IDs
+
+```{r}
+# Combine all the sample IDs
+df_meta_f <- df_meta_f %>% 
+  left_join(d1) %>% 
+  left_join(d2)
+```
+
+### SNP correction
+
+We spotted an issue with the SNP data. In a same patient -  the SNP & proteomics were of different collection ID. Since the SNP is profiling the germline DNA, and does not change, we can assume that despite the differnt collection ID, the patient was profiled in the same collection ID. Lets create an artificial colelction ID that harmonize SNPs and Proteomics or methylation.
+
+```{r}
+# Identify the mrns of patients profiled by SNPs
+df_snp <- df_meta_f %>% filter(isSNP == "Y") %>% 
+  select(mrn, HCI_cID) %>% distinct()
+mrn_snp <- df_snp %>% pull(mrn) %>% unique()
+
+# Based on mrn, identify patients profiled by proteomics / methylation 
+df_others <- df_meta_f %>% 
+  filter(isPsom == "Y" | isQ13356 == "Y" | isMeth == "Y") %>% 
+  select(mrn, HCI_cID) %>% distinct()
+
+# If a patient is profiled by SNPs / methy, get thier HCI_collection ID 
+df_others <- df_others %>% filter(mrn %in% mrn_snp)
+```
+
+Using chatGPT we get this code
+
+```{r}
+# Function to find the new HCI_cID
+find_new_HCI_cID <- function(mrn_val) {
+  matching_row <- df_meta_f %>% 
+    filter(mrn == mrn_val & (isPsom == "Y" | isQ13356 == "Y" | isMeth == "Y"))
+  
+  if (nrow(matching_row) > 0) {
+    return(matching_row$HCI_cID[1])
+  } else {
+    return(NA)
+  }
+}
+
+# Apply the function to each row
+df_meta_f <- df_meta_f %>%
+  rowwise() %>%
+  mutate(new_HCI_cID = ifelse(isSNP == "Y", find_new_HCI_cID(mrn), NA),
+         new_HCI_cID = ifelse(is.na(new_HCI_cID), HCI_cID, new_HCI_cID))
+
+
+```
+
+
+
+### Bridging samples
+
+There were some samples used as bridging, ie - run on the psomagen and the olink Q-13356. Identify these.
+
+```{r}
+id_1 <- k1 %>% pull(HCI_cID) %>% unique()
+id_2 <- k2 %>% pull(HCI_cID) %>% unique()
+psom_q13356 = intersect(id_1, id_2)
+
+df_meta_f <- df_meta_f %>% 
+  mutate(isBridge = case_when(HCI_cID %in% psom_q13356 ~ "Y",
+                              TRUE ~ "N"))
+```
+
+Do a quick Venn diagram of the bridging samples
+
+```{r}
+overlap <- calculate.overlap(
+x <- list("Psomagen"=id_1, "Q-13356"=id_2))
+
+venn.plot <- draw.pairwise.venn(
+    area1 = length(id_1),
+    area2 = length(id_2),
+    cross.area = length(overlap$a3),
+    category = c("Psomagen", "Q-13356"),
+    fill = c("blue", "red"),
+    lty = "blank",
+    cex = 2,
+    cat.cex = 2,
+    cat.pos = c(180, 180),
+    cat.dist = 0.05,
+    cat.just = list(c(0, 1), c(1, 1))
+    )
+```
+
+
+There are `r length(psom_q13356)` samples considered "bridging" samples.
+
+### Save
+
+We save the cleaned version of metadata with important information
+
+```{r}
+write.csv(df_meta_f, file.path(wd$outCurr, "MetaData_cleaned.csv"))
+```
+
+# Differences with Hey Jung previous file
+
+We wanted to summarize the difference between the previous file we have, before it was corrected.
+
+Lets only select the proteomics samples
+
+```{r}
+df_compare <- df_meta_f %>% 
+  filter(isPsom == "Y" | isQ13356 == "Y") %>% 
+  dplyr::select(mrn, HCI_cID, cohort, isPsom, isQ13356, sample_id_psom, sample_id_Q13356)
+```
+
+
+
+Now lets read in Hyujung previous info.
+
+```{r}
+# PSomagen
+df_old <- read_xlsx(file.path(wd$data, "raw/data_fromHyejung/2022_02_15_landscape_proteomics_combined_data_LIM_v4.0.xlsx"))
+```
+
+Rename the columns
+
+```{r}
+df_old <- df_old %>% 
+  select('collection_id-hci_id', cohort, sample_id) %>% 
+  dplyr::rename(HCI_cID = 'collection_id-hci_id',
+         cohort_old = cohort,
+         psomagen_id = sample_id) %>% 
+    mutate(
+    #Change cohort to only A,B,C,D. Keep C & D same
+    cohort_old=case_when(cohort_old %in% c("B","B*","B**")~"B",
+                      cohort_old %in% c("C", "D","D*") ~"C_D",
+                      TRUE ~ as.character(cohort_old)))
+```
+
+Join the two
+
+```{r}
+df_compare2 <- df_compare %>% left_join(df_old)
+
+write.csv(df_compare2, "~/Desktop/tmp.csv")
+```
+
+
+Repeat for the validation (Q-1335) cohort
+
+```{r}
+df_old2 <- read_xlsx(file.path(wd$data, "raw/data_fromHyejung/2022_02_15_landscape_proteomics_combined_data_LIM_v4.0.xlsx"))
+```
+
+
+
+# Summary
+
+## General numbers
+
+Lets focus on samples that are not considered serial samples. In general the serial samples are labelled as anything aside from 1. With 1 meaning pre-treatment and >1 meaning post-treatment. 
+
+
+This is not necessary the case. There are some 2 & 3 (under serial_sample column) that could be pre-treatment samples. 
+
+Matt gave us a list of samples that are 2 & 3 that is considered as pre-treatment. We read this file
+
+```{r}
+df_serial_info <- read_xlsx(file.path(wd$data, "updated_2024/clinical_data/To_cross_Check Zaki.xlsx"))
+```
+
+Identify the samples that are considered post treatment and exclude these
+
+```{r}
+# Identify post treatment sample from Matt's file
+serial_sam_matt <- df_serial_info %>% filter(Tx_class == "Post Treatment") %>% pull(HCI_cID)
+
+# Identify post treatment sample from Psomagen cohort, this should all be serial_sample 2/3
+serial_sam_psom <- df_meta_f %>% filter(isPsom == "Y" & serial_sample %in% c(2,3)) %>% pull(HCI_cID)
+
+# All collection sampels
+serial_sam <- unique(c(serial_sam_matt, serial_sam_psom))
+```
+
+
+Now exclude the serial samples from final analysis
+
+```{r}
+dat <- df_meta_f %>%  
+  filter(!HCI_cID %in% serial_sam)
+```
+
+
+```{r}
+# Number of unique patients
+length(unique(dat$mrn))
+# Number of collected samples (with genotype and proteomics harmonized)
+length(unique(dat$new_HCI_cID))
+```
+
+> Need to check why MRN and sample collection differs by 1
+
+
+## Overlap of samples
+
+Across the samples profiled by individual technology, do a quick Venn diagram of the overlap by samples
+
+```{r}
+id_prot <- dat %>% filter(isPsom == "Y" | isQ13356 == "Y") %>% pull(mrn) %>% unique()
+id_methy <- dat %>% filter(isMeth == "Y") %>% pull(mrn) %>% unique()
+id_SNP <- dat %>% filter(isSNP == "Y") %>% pull(mrn) %>% unique()
+
+
+overlap <- calculate.overlap(
+x <- list("Proteomics"=id_prot, 
+          "Methylation"=id_methy,
+          "SNP"=id_SNP))
+
+ggvenn(
+  x, 
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 4
+  )
+```
+
+Only Proteomics data
+
+```{r}
+id_prot1 <- dat %>% filter(isPsom == "Y") %>% pull(mrn) %>% unique()
+id_prot2 <- dat %>% filter( isQ13356 == "Y") %>% pull(mrn) %>% unique()
+
+
+
+overlap <- calculate.overlap(
+x <- list("Psomagen"=id_prot1, 
+          "Q-1335"=id_prot2))
+
+ggvenn(
+  x, 
+  fill_color = pal.study,
+  stroke_size = 0.5, set_name_size = 4
+  )
+```
+
+
+# Save
+
+Save the output
+
+```{r}
+
+```
+

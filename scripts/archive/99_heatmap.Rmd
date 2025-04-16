@@ -1,0 +1,234 @@
+---
+title: "99_heatmap"
+output: html_document
+date: "2023-03-23"
+---
+
+# Objective 
+
+Generate some heatmaps
+
+
+
+# Load library
+
+```{r}
+library(dplyr)
+library(pheatmap)
+library(paletteer)  #install.packages("paletteer")
+```
+
+
+
+# Load processed data
+
+
+```{r}
+load("processed.Rdata")
+
+```
+
+
+Few things in the Rdata ;
+
+
+1. `mat_sub` - NPX matrix 
+  - I processed the Olink data into a matrix,  OlinkID in rows and Samples in columns. 
+2. `df_anno` - The clinical metadata 
+  - Contains some clinical metadata extracted from the Original file provided by Manish
+3. `combined_o` - List of Assay differentially expressed between the cohorts
+
+# Drawing heatmap
+
+I scale the NPX values in each row 
+
+```{r}
+# Scale heatmap
+  pheatmap.scale <- function(x) {
+    m = apply(x, 1, mean, na.rm = T)
+    s = apply(x, 1, sd, na.rm = T)
+    return((x - m) / s)
+  }
+
+mat22 <- pheatmap.scale(mat_sub)
+```
+
+
+A quick heatmap is simply done by running the following
+
+```{r}
+pheatmap(mat22)
+```
+
+
+
+Now we make the heatmap a bit nicer.
+
+```{r}
+#---------------------- #
+# Set up colours
+# ---------------------- #
+
+# Colour for the cohort
+pal.cohort_main <- c("#00C7E1FF", "#FE1F04FF", "#00559EFF", "#FFC700FF")
+# Colour for time to death
+mypalette_d1 <- paletteer::paletteer_c('viridis::viridis', max(df_anno$s1_to_death_or_last_fu_mo))
+
+# Colour of the heamtap values itself
+paletteLength <- 30
+myColor <- rev(paletteer::paletteer_c('ggthemes::Red-Blue Diverging', paletteLength))
+# Values larger than -2 and 2 is fixed
+myBreaks <- c(seq(-2, 0, 
+                      length.out=ceiling(paletteLength/2) + 1), 
+                  seq(2/paletteLength, 
+                      2, length.out=floor(paletteLength/2)))
+
+
+#---------------------- #
+# Set up annotations to make it compatible with pheatmap
+# ---------------------- #
+
+  ann_col <- data.frame(Cell = df_anno$SampleID,
+                        cohort = df_anno$cohort_simple,
+                        mets = df_anno$chaarted_volume,
+                        s1_to_death_or_last_fu = df_anno$s1_to_death_or_last_fu_mo
+                        )
+  ann_col2 <- ann_col
+  row.names(ann_col) <- ann_col$Cell
+  ## Colours
+  # Remove the cell column
+  ann_col <- dplyr::select(ann_col, !Cell) # Remove cell column
+  # Specify the colours for the population
+  ann_list <- list(
+      cohort = c("A" = pal.cohort_main[1],
+               "B" = pal.cohort_main[2],
+               "C" = pal.cohort_main[3],
+               "D" = pal.cohort_main[4]),
+      mets = c("High" = "black",
+               "Low" = "grey50",
+               "N/A"= "white"),
+      s1_to_death_or_last_fu = mypalette_d1)
+
+
+```
+
+
+We can draw the heatmap
+
+
+```{r}
+p_heat <- 
+    pheatmap(mat22, 
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             scale = "none", 
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             show_colnames =F,
+             show_rownames = F,
+             annotation_legend = TRUE)
+```
+
+
+
+Nicer version of the heatmap, where we manually order the columns according to the cohort and date-to-death
+
+```{r}
+col_or <- df_anno %>% dplyr::arrange(cohort_simple, desc(s1_to_death_or_last_fu_mo), chaarted_volume)
+
+mat22_or <- mat22[,col_or$SampleID]
+
+# Another thing we want to add in the heatmap is the divide between cohorts
+sample_a <- df_anno %>% filter(cohort_simple == "A") 
+sample_b <- df_anno %>% filter(cohort_simple == "B")
+sample_c <- df_anno %>% filter(cohort_simple == "C")
+sample_d <- df_anno %>% filter(cohort_simple == "D")
+
+l_clust <- cumsum(c(nrow(sample_a), nrow(sample_b), nrow(sample_c), nrow(sample_d)))
+
+
+p_heat <- 
+    pheatmap(mat22_or, 
+             cluster_rows = FALSE, 
+             cluster_cols = FALSE,
+             scale = "none", 
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             annotation_legend = TRUE,
+             silent = FALSE)
+
+```
+
+
+One final thing (optional) is that we can also order the rows (proteins)
+
+
+```{r}
+# Based on the list of proteins differentially express, extract proteins unique to each cohort
+row_1 <- combined_o %>% filter(A == 1 & B == 0 & C == 0 & D == 0) %>% pull(OlinkID)
+row_2 <- combined_o %>% filter(A == 0 & B == 1 & C == 0 & D == 0) %>% pull(OlinkID)
+row_3 <- combined_o %>% filter(A == 0 & B == 0 & C == 1 & D == 0) %>% pull(OlinkID)
+row_4 <- combined_o %>% filter(A == 0 & B == 0 & C == 0 & D == 1) %>% pull(OlinkID)
+
+u_row <- c(row_1, row_2, row_3, row_4)
+
+# Identify non-unique proteins
+non_u_row <- combined_o %>% filter(!OlinkID %in% u_row) %>% pull(OlinkID)
+
+# Seperately cluster the rows not in the above
+mat_tmp <- mat22_or[non_u_row,]
+p_heat <- 
+    pheatmap(mat_tmp, 
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             scale = "none", 
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             show_colnames =F,
+             show_rownames = F,
+             annotation_legend = TRUE,
+             silent = TRUE)
+
+# Extract the order of the proteins
+non_u_or <- row.names(mat_tmp)[p_heat$tree_row$order]
+
+
+# Re-order the row of the heatmap matrix
+# By proteins unique to each cohort, followed by overlapping proteins
+row_or <- c(u_row, non_u_row)
+
+mat22_or <- mat22_or[row_or,]
+
+# Divider between rows
+r_clust <- cumsum(c(length(row_1), length(row_2), length(row_3), length(row_4)))
+
+
+p_heat <- 
+    pheatmap(mat22_or, 
+             cluster_rows = FALSE, 
+             cluster_cols = FALSE,
+             scale = "none", 
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             gaps_col = l_clust,
+             gaps_row = r_clust,
+             show_colnames =F,
+             show_rownames = F,
+             annotation_legend = TRUE)
+
+
+```
+
+
+

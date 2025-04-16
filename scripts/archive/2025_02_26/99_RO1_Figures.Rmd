@@ -1,0 +1,920 @@
+---
+title: "RO1 Figures"
+date: "2025-01-21"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+# Background
+
+Generate some figures for manish RO1
+
+# Library
+
+```{r, message=FALSE, warning=FALSE}
+library(here)
+library(tidyverse)
+library(readxl)   
+library(readr)
+library(stringr)
+
+library(waffle)
+
+library(tidyverse)
+library(ggplot2)
+library(VennDiagram)
+library(ggvenn)
+```
+
+# Directories
+
+```{r}
+wd <- list()
+wd$main <- here()
+wd$data <- file.path(wd$main, "data")
+wd$manishData <- file.path(wd$data, "raw/data_fromManish")
+wd$d2024 <- file.path(wd$data, "updated_2024")
+wd$d2024_npx <- file.path(wd$d2024, "NPX_data")
+wd$output <- file.path(wd$main, "output")
+wd$script <- file.path(wd$main, "scripts")
+
+wd$outData <- file.path(wd$output, "data")
+wd$outCurr <- file.path(wd$output, "99_RO1_Figures")
+
+
+```
+
+
+# Figure 1
+
+Draw waffle plot for the sample numbers
+
+
+
+```{r}
+cas_res_alive = 187
+cas_res_dead = 121
+
+hor_sen_alive = 459
+hor_sen_dead = 72
+
+local_alive = 108
+local_alive = 6
+
+```
+
+
+Plot using ChatGPT
+
+```{r}
+# Define the data
+data_list <- list(
+  "Local" = c(Alive = 108, Dead = 6),
+  "Hormone Sensitive" = c(Alive = 459, Dead = 72),
+  "Castration Resistant" = c(Alive = 187, Dead = 121)
+)
+
+# Define colors for each stage
+colors_list <- list(
+  "Local" = c("#377eb8", "grey80"), # Blue and grey
+  "Hormone Sensitive" = c("#ff7f00", "grey80"), # Orange and grey
+  "Castration Resistant" = c("#4daf4a", "grey80") # Green and grey
+)
+
+# Find the maximum total count across all datasets for scaling
+max_total <- max(sapply(data_list, sum))
+rows <- 5 # Fixed number of rows for all charts
+
+# Create waffle charts with absolute numbers and consistent dot size
+waffle_charts <- lapply(names(data_list), function(stage) {
+  data <- data_list[[stage]]
+  proportions <- round(data / max_total * (rows * 10)) # Scale to the largest dataset
+  waffle(
+    proportions,
+    rows = rows, # Fixed rows
+    flip = TRUE, # Vertical orientation
+    colors = colors_list[[stage]], # Stage-specific colors
+    title = paste(stage, "Stage"),
+    size = 0.8
+  )
+})
+
+# Arrange the waffle charts vertically
+waffle_charts_combined <- wrap_plots(waffle_charts, ncol = 1) # Vertically aligned
+print(waffle_charts_combined)
+```
+
+
+2nd version
+
+
+```{r}
+# Based on here - https://gist.github.com/PaulC91/f7e76a4dade52edf0c3034e87d200b40
+
+# Data
+data <- data.frame(
+  Stage = c("Local", "Local", "Hormone Sensitive", "Hormone Sensitive", "Castration Resistant", "Castration Resistant"),
+  Status = c("Alive", "Dead", "Alive", "Dead", "Alive", "Dead"),
+  Count = c(108, 6, 459, 72, 187, 121)
+)
+
+
+# Preprocess data for correct proportions
+processed_data <- data %>%
+  group_by(Stage) %>%
+  mutate(
+    Total = max(Count[Status == "Alive"]), # Use "Alive" count as the total bar height
+    Proportion = ifelse(Status == "Alive", Total - Count[Status == "Dead"], Count),
+    Status = ifelse(Status == "Dead", "Dead", Stage), # Change "Alive" to the stage name for coloring
+    Stage = factor(Stage, levels=c("Local", "Hormone Sensitive", "Castration Resistant"))
+  ) 
+
+# Custom colors
+status_colors <- c(
+  "Local" = "#377eb8",                  # Blue for Local Alive
+  "Hormone Sensitive" = "#ff7f00",     # Orange for Hormone Sensitive Alive
+  "Castration Resistant" = "#4daf4a",  # Green for Castration Resistant Alive
+  "Dead" = "grey70"                    # Grey for Dead
+)
+
+# Plot
+p1 <- 
+  ggplot(processed_data, aes(fill = Status, values = Proportion)) +
+  geom_waffle(color = "white", size = 0.25, n_rows = 10, flip = TRUE, show.legend = TRUE) +
+  #facet_wrap(~Stage, nrow = 1, strip.position = "bottom") +
+  facet_wrap(~Stage, nrow=1, 
+             labeller = labeller(Stage = c(
+               "Local" = "Local \n(n=108)",
+               "Hormone Sensitive" = "mHSPC \n(n=459)",
+               "Castration Resistant" = "mCRPC \n(n=187)"))) +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_continuous(
+    breaks = seq(0, 50, by = 5),
+    limits = c(0, 50),
+    labels = function(x) x * 10, # Adjust multiplier to match n_rows
+    expand = c(0, 0)
+  ) +
+  scale_fill_manual(values = status_colors, name = NULL) +
+  coord_equal() +
+  labs(
+    title = "Faceted Waffle Bars",
+    subtitle = "Total = Alive count, Dead colored in grey",
+    x = "Stage",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.ticks.y = element_line()
+    #strip.text = element_text(size = 14, face = "bold")
+  ) +
+  guides(fill = guide_legend(reverse = FALSE))
+
+p1
+
+ggsave(p1, file=file.path(wd$outCurr, "NumSamples.pdf"), height = 6, width = 5)
+
+```
+
+
+# Figure 2 - Nomogram
+
+Generating Nomogram of methylation data
+
+
+
+```{r}
+library(rms)
+library(QHScrnomo)
+library(survival)
+library(forestplot)
+```
+
+
+This was based on the composite score of 5 methylation regions
+
+Re-run nomogram on Liang's data
+
+```{r}
+dat_l <- read_xlsx(file.path(wd$d2024,"methylation/Clin15MHB_LogV2.xlsx")) %>% 
+# dat_l <- read_xlsx(file.path(wd$d2024,"methylation/Jan 9 2025 Clin15MHB_LogV2.xlsx")) %>% 
+  mutate(death = death_y_n,
+         OS = s1_to_death_or_last_fu_mo,
+         alk_ph = as.numeric(alk_phos_at_s1),
+         psa = psa_at_s1,
+         ldh = as.numeric(ldh_at_s1),
+         HCI_cID = Samples,
+         comp = `15_MHB_Composite`,
+         p_ct = cfDNA
+         ) 
+
+dat_l_sub <- dat_l %>% 
+  select(Samples, HCI_cID, death, OS, alk_ph, psa, ldh, comp, p_ct) 
+tmp_os <- dat_l_sub %>% select(Samples, OS, death)
+
+
+# Recalculate the composite score (For one protien)
+# 1) Uni-variate - Fit the Cox proportional hazards model
+met_dat <- dat_l %>% select(Samples, `10_45418808_45420022`:`9_21989731_21989796`) %>% 
+  reshape2::melt() 
+met_dat_tmp <- met_dat %>% filter(variable == "10_45418808_45420022") %>% 
+  left_join(tmp_os)
+
+model <- coxph(Surv(OS, death) ~ value, data = met_dat_tmp)
+
+
+# Repeat for all proteins
+cd_prot <- unique(met_dat$variable)
+
+
+results <- analyze_methylome(cd_prot, npx_in=met_dat, meta_in=tmp_os)
+final_results <- do.call(rbind, results)
+```
+
+Generation of nomogram based on the provided composite score
+
+```{r}
+# Formating for nomogram
+dd2 <- datadist(dat_l_sub)
+options(datadist = "dd2") 
+
+
+cox_fit_l <- cph(Surv(OS, death) ~ psa+ldh+alk_ph+p_ct,
+               data = dat_l_sub, surv=TRUE,
+               x = TRUE, y = TRUE)
+
+# Quick plot
+cox_fit2 <- coxph(Surv(OS, death) ~ psa+ldh+alk_ph+comp+p_ct,
+                data = dat_l_sub)
+ggforest(cox_fit2, data=dat_l_sub)
+
+
+# Plot v2
+fit_summary <- summary(cox_fit2)
+# Extract the HR (exp(coef)), lower and upper 95% CI, and p-values
+hr <- round(fit_summary$coefficients[, "exp(coef)"],3)
+lower_ci <- round(fit_summary$conf.int[, "lower .95"],4)
+upper_ci <- round(fit_summary$conf.int[, "upper .95"],4)
+p_values <- fit_summary$coefficients[, "Pr(>|z|)"]
+
+format_p_values <- function(p) {
+  ifelse(p < 0.001, "<0.001", sprintf("%.4f", p))
+}
+formatted_p_values <- format_p_values(p_values)
+
+data <- data.frame(
+  Variable = names(cox_fit2$coefficients),
+  HR = hr,
+  Lower_CI = lower_ci,
+  Upper_CI = upper_ci,
+  P_value = formatted_p_values
+)
+
+# Formatting the table text
+tabletext <- cbind(
+  c("Variable", data$Variable),
+  c("HR (95% CI)", paste0(data$HR, " (", data$Lower_CI, "-", data$Upper_CI, ")")),
+  c("P-value", data$P_value)
+)
+
+# Forest plot
+forestplot(labeltext = tabletext,
+           mean = c(NA, data$HR),
+           lower = c(NA, data$Lower_CI),
+           upper = c(NA, data$Upper_CI),
+           is.summary = c(TRUE, rep(FALSE, nrow(data))),
+           xlab = "Hazard Ratio",
+           col = forestplot::fpColors(box = "red", lines = "black", zero = "gray"))
+
+
+
+# Nomogram
+pdf(file.path(wd$outCurr, "Nomogram_methylation.pdf"), height=5, width = 11)
+nom <- nomogram.mk6(cox_fit_l, 
+                    fun = list(function(x) Survival(cox_fit_l)(6, x),   # 6 month survival probability
+                               function(x) Survival(cox_fit_l)(12, x),   # 1-year survival probability
+                               function(x) Survival(cox_fit_l)(24, x)),  # 2-year survival probability
+                    lp = FALSE,
+                    funlabel = c("6 months survival probability", 
+                                 "12 months survival probability",
+                                 "24 months survival probability"))
+dev.off()
+```
+
+
+# Figure 3 - AUC
+
+```{r}
+library(rms)
+library(survival)
+library(timeROC)
+```
+
+AUC - methylation
+
+```{r}
+data <- dat
+time_point <- c(6, 12, 24)
+
+# Fit a Cox proportional hazards model
+cox_model_1 <- cph(Surv(OS, death) ~ psa + ldh + alk_ph, data = dat, x = TRUE, y = TRUE, surv = TRUE)
+cox_model_2 <- cph(Surv(OS, death) ~ psa + ldh + alk_ph + comp, data = dat, x = TRUE, y = TRUE, surv = TRUE)
+
+# Calculate the linear predictor from the Cox model
+lp_1 <- predict(cox_model_1, type = "lp")
+lp_2 <- predict(cox_model_2, type = "lp")
+
+# Generate the time-dependent ROC curves for 12 and 24 months
+roc_12_1 <- timeROC(T = data$OS, delta = data$death, marker = lp_1, cause = 1, times = time_point, iid = TRUE)
+roc_12_2 <- timeROC(T = data$OS, delta = data$death, marker = lp_2, cause = 1, times = time_point, iid = TRUE)
+
+
+# # -- OR USING THE FITTED RISK -- 
+# # Calulating the fitted risk
+# fitted_risk_1 <- exp(lp_1)
+# fitted_risk_2 <- exp(lp_2)
+# roc_12_1 <- timeROC(T = data$OS, delta = data$death, marker = fitted_risk_1, cause = 1, times = time_point, iid = TRUE)
+# roc_12_2 <- timeROC(T = data$OS, delta = data$death, marker = fitted_risk_2, cause = 1, times = time_point, iid = TRUE)
+# 
+
+
+
+au_1 <- round(roc_12_1$AUC[2],2)
+au_2 <- round(roc_12_2$AUC[2],2)
+# Plot the ROC curves
+pdf(file.path(wd$outCurr, paste0("AUC_Methy_", time_point, ".pdf")),width = 6, height = 6)
+plot(roc_12_1, time = time_point, col = "#FFCEAC", lwd=3, title="")
+title(paste0(time_point, " months"))
+plot(roc_12_2, time = time_point, col = "#A7BFD0", lwd=3, add = TRUE)
+legend("bottomright", 
+       legend = c(paste0("Clin_", au_1),
+                  paste0("Clin + Methy_", au_2)), 
+       col = c("#FFCEAC", "#A7BFD0"), lty = c(1, 1))
+dev.off()
+
+```
+
+
+# Methylation 
+
+Identify significant regions
+
+```{r}
+# Sample data frame
+data <- read_xlsx(file.path(wd$d2024, "methylation/MBS_mHAPclinical.xlsx"))
+
+# Ensure Cohort column is a factor
+data$Cohort <- factor(data$Cohort)
+
+# Convert methylation columns to numeric
+data[, 3:ncol(data)] <- lapply(data[, 3:ncol(data)], function(x) as.numeric(as.character(x)))
+
+# Check for NA values in numeric columns
+if (any(is.na(data[, 3:ncol(data)]))) {
+  cat("Warning: Missing values detected in methylation columns. Rows with NA values will be excluded.\n")
+}
+
+# Initialize an empty list to store results
+results <- list()
+
+# Loop through each methylation region (columns 3 onward)
+for (region in colnames(data)[3:ncol(data)]) {
+  # Subset data by cohorts
+  cohort_a <- data %>% filter(Cohort == "A") %>% pull({{ region }})
+  cohort_b <- data %>% filter(Cohort == "B") %>% pull({{ region }})
+  cohort_cd <- data %>% filter(Cohort %in% c("C", "D")) %>% pull({{ region }})
+
+  # Remove NA values for t-test calculations
+  cohort_a <- na.omit(cohort_a)
+  cohort_b <- na.omit(cohort_b)
+  cohort_cd <- na.omit(cohort_cd)
+
+  # Skip analysis if any group is empty
+  if (length(cohort_a) == 0 | length(cohort_b) == 0 | length(cohort_cd) == 0) {
+    warning(paste("Skipping region", region, "due to insufficient data in one or more cohorts.\n"))
+    next
+  }
+
+  # Perform t-tests
+  t_test_a_cd <- t.test(cohort_a, cohort_cd)
+  t_test_b_cd <- t.test(cohort_b, cohort_cd)
+
+  # Calculate fold changes (mean difference)
+  fold_change_a_cd <- mean(cohort_cd) / mean(cohort_a)
+  fold_change_b_cd <- mean(cohort_cd) / mean(cohort_b)
+
+  # Store results
+  results[[region]] <- data.frame(
+    Region = region,
+    P_Value_A_vs_CD = t_test_a_cd$p.value,
+    Fold_Change_A_vs_CD = fold_change_a_cd,
+    P_Value_B_vs_CD = t_test_b_cd$p.value,
+    Fold_Change_B_vs_CD = fold_change_b_cd
+  )
+}
+
+# Combine all results into a single data frame
+final_results <- do.call(rbind, results)
+
+```
+
+Plot
+
+```{r}
+# Function to create a violin plot for a specified region
+plot_violin <- function(data, region) {
+  # Check if the region exists in the data
+  if (!(region %in% colnames(data))) {
+    stop("Specified region not found in the data")
+  }
+
+  # Create a new Cohort variable with combined groups C and D
+  data <- data %>%
+    mutate(Cohort_Grouped = ifelse(Cohort %in% c("C", "D"), "C+D", as.character(Cohort)))
+
+  # Create the violin plot
+  plot <- ggplot(data, aes(x = Cohort_Grouped, y = .data[[region]], fill = Cohort_Grouped)) +
+    geom_violin(trim = FALSE) +
+    geom_jitter(width = 0.2, alpha = 0.5) +
+    labs(title = paste("Violin Plot for Region:", region),
+         x = "Cohort",
+         y = "Value") +
+    theme_minimal() +
+    theme(legend.position = "none")
+
+  print(plot)
+}
+
+# Example usage
+# Replace "1_109667873_109668235" with the desired region
+violin_plot <- plot_violin(data, "7_47992116_47992319")
+violin_plot <- plot_violin(data, "20_56392919_56393077")
+violin_plot <- plot_violin(data, "7_131555570_131556685")
+
+```
+
+As MHB are Beta values, use beta.test
+
+```{r}
+library(betareg)
+# Sample data frame
+data <- read_xlsx(file.path(wd$d2024, "methylation/MBS_mHAPclinical.xlsx"))
+
+# Initialize an empty list to store results
+results <- list()
+
+# Ensure Cohort column is a factor
+data$Cohort <- factor(data$Cohort)
+
+# Convert methylation columns to numeric
+data[, 3:ncol(data)] <- lapply(data[, 3:ncol(data)], function(x) as.numeric(as.character(x)))
+
+# Create a new column that groups "C" and "D" into "C+D"
+data <- data %>%
+  mutate(Cohort_Grouped = ifelse(Cohort %in% c("C", "D"), "C+D", as.character(Cohort)),
+         Cohort_Grouped = as.factor(Cohort_Grouped))
+#data <- data %>% na.omit()
+data$Cohort_Grouped <- relevel(data$Cohort_Grouped, ref = "C+D")
+
+
+# Initialize an empty list to store results
+results <- list()
+
+# Loop through each methylation region (columns 3 onward)
+for (region in colnames(data)[3:(ncol(data) - 1)]) { # Exclude "Cohort_Grouped" from iteration
+  # Subset the data for the region
+  region_data <- data %>%
+    select(Cohort_Grouped, all_of(region)) %>%
+    rename(MHB_values = !!region) # Rename column for consistency
+  
+  # Remove rows with NA values
+  region_data <- na.omit(region_data)
+  
+  # Skip analysis if there is insufficient data in one or more groups
+  if (length(unique(region_data$Cohort_Grouped)) < 2) {
+    warning(paste("Skipping region", region, "due to insufficient data in one or more groups.\n"))
+    next
+  }
+  
+  # Fit the beta regression model
+  model <- betareg(MHB_values ~ Cohort_Grouped, data = region_data)
+  
+  # Calculate fold changes (mean ratio relative to C+D)
+  cohort_means <- region_data %>%
+    group_by(Cohort_Grouped) %>%
+    summarise(Mean = mean(MHB_values, na.rm = TRUE))
+  
+# Ensure "C+D" exists for absolute difference calculation
+if ("C+D" %in% cohort_means$Cohort_Grouped) {
+  differences <- cohort_means %>%
+    mutate(Absolute_Difference = Mean - Mean[Cohort_Grouped == "C+D"]) %>%
+    filter(Cohort_Grouped != "C+D")
+  
+  # Store results
+  results[[region]] <- data.frame(
+    Region = region,
+    P_Value_Cohort_Grouped = summary(model)$coefficients$mean[, "Pr(>|z|)"],
+    Absolute_Difference_A_vs_CD = ifelse("A" %in% differences$Cohort_Grouped, 
+                                         differences$Absolute_Difference[differences$Cohort_Grouped == "A"], NA),
+    Absolute_Difference_B_vs_CD = ifelse("B" %in% differences$Cohort_Grouped, 
+                                         differences$Absolute_Difference[differences$Cohort_Grouped == "B"], NA)
+  )
+}
+
+}
+
+# Combine all results into a single data frame
+final_results <- do.call(rbind, results)
+
+```
+
+
+Filter regions
+
+```{r}
+# Filter results to exclude "(Intercept)" rows
+filtered_results <- final_results %>%
+  tibble::rownames_to_column(var = "name") %>% 
+  filter(grepl("Cohort_Grouped", name)) %>% # Keep only group comparisons
+  mutate(Comparison = ifelse(grepl("Cohort_GroupedA", name), "C+D vs A",
+                             ifelse(grepl("Cohort_GroupedB", name), "C+D vs B", NA)))
+
+# Apply FDR correction for each comparison
+filtered_results <- filtered_results %>%
+  group_by(Comparison) %>%
+  mutate(Adjusted_P_Value = p.adjust(P_Value_Cohort_Grouped, method = "fdr")) %>%
+  ungroup()
+
+# Filter significant regions (adjusted p-value < 0.05)
+significant_regions <- filtered_results %>%
+  filter(Adjusted_P_Value <= 0.1)
+
+sig_regions <- unique(significant_regions$Region)
+sig_regions <- paste0("r_", sig_regions)
+length(unique(sig_regions))
+```
+
+
+
+Draw the heatmap
+
+```{r}
+# Get the data as matrix
+mat_dat <- data %>% 
+  na.omit() %>% 
+  as.data.frame() %>% 
+  dplyr::select(-Cohort, -Cohort_Grouped) %>% 
+  tibble::column_to_rownames(var = "Samples")
+colnames(mat_dat) <- paste0("r_", colnames(mat_dat))
+mat_dat[] <- lapply(mat_dat, function(x) as.numeric(as.character(x)))
+mat_dat_ori <- mat_dat
+mat_dat <- t(mat_dat)
+
+# Subset to sig regions
+mat_dat <- mat_dat[, ]
+
+# Scale heatmap
+pheatmap.scale <- function(x) {
+  m = apply(x, 1, mean, na.rm = T)
+  s = apply(x, 1, sd, na.rm = T)
+  return((x - m) / s)
+}
+
+heatmap_data <- pheatmap.scale(mat_dat)
+
+
+
+# Make the heatmap nicer. We want to order sample C_D
+sample_CD <- data %>% filter(Cohort_Grouped == "C+D") %>% pull(Samples)
+mat_tmp <-  heatmap_data[,sample_CD]
+
+p_heat <- 
+  pheatmap::pheatmap(mat_tmp, 
+           cluster_rows = TRUE, 
+           cluster_cols = TRUE,
+           scale = "none", # Change to none if we scaled the data
+           silent = TRUE)
+cd_or <- sample_CD[p_heat$tree_col$order]
+
+
+# Just get the mean / median of all genes and order by it
+column_medians <- sort(apply(mat_tmp, 2, function(x) median(x, na.rm = TRUE)))
+
+
+# Re arrange the heamap 
+# Make cohort A first
+o1 <- data %>% filter(Cohort_Grouped == "A") %>% pull(Samples)
+o1 <- colnames(mat_dat)[colnames(mat_dat) %in% o1]
+# Cohort B 2nd
+o2 <- data %>% filter(Cohort_Grouped == "B") %>% pull(Samples)
+o2 <- colnames(mat_dat)[colnames(mat_dat) %in% o2]
+
+# Now order
+
+mat22_or <- heatmap_data[,c(o1, o2, cd_or)]
+mat22_or <- heatmap_data[,c(o1, o2, names(column_medians))]
+
+# New order 
+new_or <- data.frame(
+  SampleID = c(o1, o2, cd_or),
+  cohort = c(
+    rep("A", length(o1)),
+    rep("B", length(o2)),
+    rep("C+D", length(cd_or))
+  )) 
+
+group_colors <- c("A" = "#AEC7E8", 
+                  "B" = "#FFBB78",
+                  "C+D" = "#98DF8A")  
+
+# Create column annotation
+column_anno2 <- HeatmapAnnotation(
+  Group = new_or$cohort,
+  col = list(Group = group_colors),
+  annotation_legend_param = list(
+    title = "Column Groups",
+    at = names(group_colors),
+    labels = names(group_colors)
+  )
+)
+
+
+# Generate a custom color scheme
+paletteLength <- 30
+mypalette1 <- rev(paletteer::paletteer_c('ggthemes::Red-Blue Diverging', paletteLength))
+mypalette1 <- as.character(mypalette1)  # Ensure the colors are character strings
+
+# Define breaks for the colors
+myBreaks <- seq(-2, 3, length.out = paletteLength)  # Match the number of breaks to paletteLength
+
+# Create a custom color function using colorRamp2
+col_fun <- colorRamp2(myBreaks, mypalette1)
+
+
+# Define the heatmap
+ht <- Heatmap(
+  mat22_or,
+  name = "Expression",
+  row_title = "Genes",
+  column_title = "Samples",
+  top_annotation = column_anno2,
+  show_row_names = FALSE,
+  show_column_names = FALSE,
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  column_split = factor((new_or$cohort)),  # Split columns by groups
+  gap = unit(2, "mm"),  # Specify gap size between groups
+  col = col_fun,  # Apply the custom color function
+  heatmap_legend_param = list(
+    #title = "Z-score",
+    at = seq(-2, 3, by = 1),  # Adjust ticks to match your breaks
+    labels = seq(-2, 3, by = 1)  # Labels for each tick
+  )
+)
+
+# Combine heatmap and annotations
+pdf(file.path(wd$outCurr, "Stage_specific_heatmap.pdf"), height = 6, width = 12)
+draw(ht + dot_plot_anno, heatmap_legend_side = "right", annotation_legend_side = "right")
+dev.off()
+
+```
+
+
+Find regions associated with OS
+
+```{r}
+cd_prot <- sig_regions
+met_dat <- mat_dat_ori %>% 
+  tibble::rownames_to_column(var = "Samples") %>% 
+  reshape2::melt() 
+
+# Apply multiple correction
+results <- analyze_methylome(cd_prot, npx_in=met_dat, meta_in=tmp_os)
+final_results <- do.call(rbind, results) %>% 
+  # Adjust the P_value
+  mutate(adj_p_values = p.adjust(P_Value, method = "fdr")) 
+```
+
+Filter to FDR
+
+```{r}
+final_results <- final_results %>% 
+  filter(adj_p_values < 0.05)
+```
+
+
+Generate composite risk score on the top 15
+
+```{r}
+top15 <- final_results %>% 
+  slice_max(n=15, HR)
+```
+
+
+Calculate composite score
+
+```{r}
+
+
+results <- analyze_methylome(cd_prot, npx_in=met_dat, meta_in=tmp_os)
+```
+
+
+# Proteomics
+
+
+Generate the top 15 proteins as before
+
+```{r}
+load("~/Desktop/Desktop_items_2025_01_21/Proteomics.Rdata")
+wd$outCurr <- file.path(wd$output, "99_RO1_Figures")
+
+```
+
+
+Run the cox and plot the HR
+
+```{r}
+# Try with the Olink protein
+dat <- dat %>% mutate(npx_bin = factor(npx_bin, levels = c("low", "high")))
+cox_fit <- cph(Surv(OS, death) ~ psa+ldh+alk_ph+alb+npx_bin,
+               data = dat, surv=TRUE,
+               x = TRUE, y = TRUE)
+cox_fit_clin_prot <- cox_fit
+
+cox_fit2 <- coxph(Surv(OS, death) ~ psa+ldh+alk_ph+alb+npx_bin,
+                data = dat)
+# ggforest(cox_fit2, data=dat)
+
+# Quick plot v2
+fit_summary <- summary(cox_fit2)
+
+
+# Extract the HR (exp(coef)), lower and upper 95% CI, and p-values
+hr <- round(fit_summary$coefficients[, "exp(coef)"],3)
+lower_ci <- round(fit_summary$conf.int[, "lower .95"],4)
+upper_ci <- round(fit_summary$conf.int[, "upper .95"],4)
+p_values <- fit_summary$coefficients[, "Pr(>|z|)"]
+
+format_p_values <- function(p) {
+  ifelse(p < 0.001, "<0.001", sprintf("%.4f", p))
+}
+formatted_p_values <- format_p_values(p_values)
+
+data <- data.frame(
+  Variable = names(cox_fit2$coefficients),
+  HR = hr,
+  Lower_CI = lower_ci,
+  Upper_CI = upper_ci,
+  P_value = formatted_p_values
+)
+
+# Formatting the table text
+tabletext <- cbind(
+  c("Variable", data$Variable),
+  c("HR (95% CI)", paste0(data$HR, " (", data$Lower_CI, "-", data$Upper_CI, ")")),
+  c("P-value", data$P_value)
+)
+
+# Forest plot
+forestplot(labeltext = tabletext,
+           mean = c(NA, data$HR),
+           lower = c(NA, data$Lower_CI),
+           upper = c(NA, data$Upper_CI),
+           is.summary = c(TRUE, rep(FALSE, nrow(data))),
+           xlab = "Hazard Ratio",
+           col = forestplot::fpColors(box = "red", lines = "black", zero = "gray"))
+
+```
+
+Plot the nomogram
+
+```{r}
+# Nomogram
+svg(file.path(wd$outCurr, "Nomogram_proteomics.svg"), height=5, width = 9)
+nom <- nomogram.mk6(cox_fit, 
+                    fun = list(function(x) Survival(cox_fit)(6, x),   # 1-year survival probability
+                               function(x) Survival(cox_fit)(12, x),   # 2-year survival probability
+                               function(x) Survival(cox_fit)(24, x)),  # 3-year survival probability
+                    lp = FALSE,
+                    funlabel = c("6 months survival probability", 
+                                 "12 months survival probability",
+                                 "24 months survival probability"))
+dev.off()
+
+```
+
+Plot the AUC
+
+
+```{r}
+data <- dat
+time_point <- c(6, 12, 24)
+
+# Fit a Cox proportional hazards model
+cox_model_1 <- cph(Surv(OS, death) ~ psa + ldh + alk_ph, data = dat, x = TRUE, y = TRUE, surv = TRUE)
+cox_model_2 <- cph(Surv(OS, death) ~ psa + ldh + alk_ph + npx_bin, data = dat, x = TRUE, y = TRUE, surv = TRUE)
+
+# Calculate the linear predictor from the Cox model
+lp_1 <- predict(cox_model_1, type = "lp")
+lp_2 <- predict(cox_model_2, type = "lp")
+
+# Generate the time-dependent ROC curves for 12 and 24 months
+roc_12_1 <- timeROC(T = data$OS, delta = data$death, marker = lp_1, cause = 1, times = time_point, iid = TRUE)
+roc_12_2 <- timeROC(T = data$OS, delta = data$death, marker = lp_2, cause = 1, times = time_point, iid = TRUE)
+
+
+# # -- OR USING THE FITTED RISK -- 
+# # Calulating the fitted risk
+# fitted_risk_1 <- exp(lp_1)
+# fitted_risk_2 <- exp(lp_2)
+# roc_12_1 <- timeROC(T = data$OS, delta = data$death, marker = fitted_risk_1, cause = 1, times = time_point, iid = TRUE)
+# roc_12_2 <- timeROC(T = data$OS, delta = data$death, marker = fitted_risk_2, cause = 1, times = time_point, iid = TRUE)
+# 
+
+
+
+au_1 <- round(roc_12_1$AUC,2)
+au_2 <- round(roc_12_2$AUC,2)
+# Plot the ROC curves for clinical alone
+pdf(file.path(wd$outCurr, "AUC_Methy_clinical.pdf"),width = 6, height = 6)
+plot(roc_12_1, time = 6, col = "red", title=" ")
+title(main = "Clinical only")
+lines(roc_12_1$FP[, 2], roc_12_1$TP[, 2], col = "blue")
+lines(roc_12_1$FP[, 3], roc_12_1$TP[, 3], col = "green")
+legend("bottomright", 
+       legend = c(
+           paste0("6 months AUC = ", au_1[1]), 
+           paste0("12 months AUC = ", au_1[2]), 
+           paste0("24 months AUC = ", au_1[3])
+       ), 
+       col = c("red", "blue", "green"), lty = 1)
+dev.off()
+
+
+# Plot the ROC curves for clinical alone
+pdf(file.path(wd$outCurr, "AUC_Methy_clinical_proteome.pdf"),width = 6, height = 6)
+plot(roc_12_2, time = 6, col = "red", title=" ")
+title(main = "Clinical + Proteome")
+lines(roc_12_2$FP[, 2], roc_12_2$TP[, 2], col = "blue")
+lines(roc_12_2$FP[, 3], roc_12_2$TP[, 3], col = "green")
+legend("bottomright", 
+       legend = c(
+           paste0("6 months AUC = ", au_2[1]), 
+           paste0("12 months AUC = ", au_2[2]), 
+           paste0("24 months AUC = ", au_2[3])
+       ), 
+       col = c("red", "blue", "green"), lty = 1)
+dev.off()
+
+
+```
+
+PLot in one PDF
+
+```{r}
+# Open a PDF device
+pdf(file.path(wd$outCurr, "Combined_AUC.pdf"), width = 10, height = 5)  # Adjust width and height as needed
+
+# Set up a 1x2 plotting layout
+par(mfrow = c(1, 2))  # 1 row, 2 columns
+
+# First plot: Clinical only
+plot(roc_12_1, time = 6, col = "red", title = " ")
+title(main = "Clinical only")
+lines(roc_12_1$FP[, 2], roc_12_1$TP[, 2], col = "blue")
+lines(roc_12_1$FP[, 3], roc_12_1$TP[, 3], col = "green")
+legend("bottomright", 
+       legend = c(
+           paste0("6 months AUC = ", au_1[1]), 
+           paste0("12 months AUC = ", au_1[2]), 
+           paste0("24 months AUC = ", au_1[3])
+       ), 
+       col = c("red", "blue", "green"), lty = 1)
+
+
+
+# 2nd plot: Clinical + Proteome
+plot(roc_12_2, time = 6, col = "red", title = " ")
+title(main = "Clinical + Proteome")
+lines(roc_12_2$FP[, 2], roc_12_2$TP[, 2], col = "blue")
+lines(roc_12_2$FP[, 3], roc_12_2$TP[, 3], col = "green")
+legend("bottomright", 
+       legend = c(
+           paste0("6 months AUC = ", au_2[1]), 
+           paste0("12 months AUC = ", au_2[2]), 
+           paste0("24 months AUC = ", au_2[3])
+       ), 
+       col = c("red", "blue", "green"), lty = 1)
+
+
+# Close the PDF device
+dev.off()
+```
+

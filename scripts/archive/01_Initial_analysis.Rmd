@@ -1,0 +1,981 @@
+---
+title: "Initial analysis"
+date: "2022-12-01"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+# Background
+
+[Manish Kohli](https://healthcare.utah.edu/fad/mddetail.php?physicianID=u6029853) generated data from Olink assay of Prostate cancer patients. We aim to analyse the data to answer the folowing questions. 
+
+
+# Objectives
+
+1. Visualize a summar of the clinical data
+  * Sankey plot / Waffle plot
+2. Protein expression repertoire across different stages of progression
+  
+
+# Pre-processing 
+
+## Loading packages
+
+```{r, message=FALSE, warning=FALSE}
+library(devtools)
+library(here)
+library(tidyverse)
+library(readxl)   
+library(OlinkAnalyze) # install.packages("OlinkAnalyze")
+library(stringr)
+# Plotting  
+library(ggbeeswarm)
+library(pheatmap)
+library(ggsignif)
+library(UpSetR)
+library(RColorBrewer)
+library(ggalluvial) # install.packages("ggalluvial")
+#library(ggvenn) #devtools::install_github("yanlinlin82/ggvenn")
+library(venn) # install.packages("venn")
+library(paletteer)
+library(UpSetR)
+```
+
+
+## Directories
+
+```{r}
+wd <- list()
+wd$main <- here()
+wd$data <- file.path(wd$main, "data")
+wd$manishData <- file.path(wd$data, "raw/data_fromManish")
+wd$output <- file.path(wd$main, "output")
+wd$script <- file.path(wd$main, "scripts")
+```
+
+
+Create directories
+
+```{r}
+if (!file.exists(wd$output )) {
+  dir.create(wd$output )
+} else {
+  print("Directory already exists")
+}
+```
+
+Load functions
+
+```{r}
+source(file.path(wd$script, "functions.R"))
+```
+
+
+Set up colours
+
+```{r}
+pal.cohort_main <- c("#F8766D", "#7CAE00", "#00BFC4", "#C77CFF")
+
+pal.cohort_main <- c(turqoise, red, darkblue, yellow)
+
+```
+
+
+## Load data
+
+There were 3 files provided by Manish, we detail them here and read into R.
+
+
+
+1. **2022_11_04_LS_prot_clin_data_ID**
+
+This file contains clinical data for each patients. One line per-patient. Variables such as PSA, cancer sub-group (cancer severity), treatment given. The unque patient ID is given at column `mrn` or `pt_idx`. 
+
+2. **2022_02_15_LS_prot_samples_ID_v4.5**
+
+This file contains metadata related to how samples were processed. Eg - date samples were collected, time point of collection (some patient samples were collected at mulitple time-points). One patient may have multiple lines of data if it has multiple timepoints. There is a column `mrn` or `pt_idx` that links to the NPX `sampleID` in file 3. 
+
+3. **E3072_AN00003660_AN00003661_NPX_2022-04-21-columns**
+
+This file is the NPX values from Olink. Samples are listed in the `SampleID` column
+
+```{r}
+# Read the files
+meta_clin <- readxl::read_excel(file.path(wd$manishData, "2022_11_04_LS_prot_clin_data_ID.xlsx"))
+meta_samp <- readxl::read_excel(file.path(wd$manishData, "2022_02_15_LS_prot_samples_ID_v4.5.xlsx"))
+dat_NPX <- readxl::read_excel(file.path(wd$manishData, "E3072_AN00003660_AN00003661_NPX_2022-04-21-columns.xlsx"))
+```
+
+
+# Objective 1
+
+Here we visuaize some aspects of the data
+
+## Sankey summary 
+
+It is helpful to create an clinical annotation file simpifying some columns 
+
+```{r}
+dat_anno <- meta_clin %>%
+  dplyr::mutate(T_stage = 
+                  case_when(str_detect(T_stage, "T1") ~ "T1",
+                            str_detect(T_stage, "T2") ~ "T2",
+                            str_detect(T_stage, "T3") ~ "T3",
+                            str_detect(T_stage, "T4") ~ "T4",
+                            str_detect(T_stage, "TX") ~ "TX",
+                            TRUE ~ "Unknown"),
+                cohort_simple = 
+                  case_when(str_detect(cohort, "A") ~ "A",
+                            str_detect(cohort, "B") ~ "B",
+                            str_detect(cohort, "C") ~ "C",
+                            str_detect(cohort, "D") ~ "D"),
+                glsn_bin = 
+                  case_when(diag_glsn_sum >=  8 ~ "above_8",
+                            diag_glsn_sum <=  7 ~ "below_7"),
+                cohort_main = 
+                  case_when(cohort_simple == "A"~ "Local",
+                            cohort_simple %in% c("B", "C", "D") ~ "Metas"))
+```
+
+
+Create a data frame to generate Sankey / alluvial plot
+
+```{r}
+#dat_clin <- meta_samp %>%
+#  dplyr::group_by(pt_idx) %>%
+#  dplyr::summarise(n_case=n()) %>% 
+#  dplyr::arrange(desc(n_case))
+
+# Simplifying tumor category
+T1_c <- c("T1c")
+T2_c <- c("T2")
+
+
+df_sank <- meta_clin %>%
+  #dplyr::select(pt_idx, T_stage, cohort, diag_glsn_sum) %>%
+  # Simplify
+  dplyr::mutate(T_stage = 
+                  case_when(str_detect(T_stage, "T1") ~ "T1",
+                            str_detect(T_stage, "T2") ~ "T2",
+                            str_detect(T_stage, "T3") ~ "T3",
+                            str_detect(T_stage, "T4") ~ "T4",
+                            str_detect(T_stage, "TX") ~ "TX",
+                            TRUE ~ "Unknown"),
+                cohort = 
+                  case_when(str_detect(cohort, "A") ~ "A",
+                            str_detect(cohort, "B") ~ "B",
+                            str_detect(cohort, "C") ~ "C",
+                            str_detect(cohort, "D") ~ "D"),
+                glsn_bin = 
+                  case_when(diag_glsn_sum >=  8 ~ "above_8",
+                            diag_glsn_sum <=  7 ~ "below_7"),
+                cohort_main = 
+                  case_when(cohort == "A"~ "Local",
+                            cohort %in% c("B", "C", "D") ~ "Metas")) %>%
+  dplyr::group_by(glsn_bin, cohort, initial_local_tx_type) %>%
+  dplyr::summarise(Freq=n()) 
+
+# Basic plot
+ggplot(data = df_sank,
+       aes(y=Freq,
+           axis1 = glsn_bin, 
+           axis2 = cohort,
+           axis3 = initial_local_tx_type
+           #axis4 = initial_local_tx_type
+           )) +
+  geom_alluvium(aes(fill = cohort)) +
+  geom_stratum() +
+  geom_text(stat = "stratum",
+            aes(label = after_stat(stratum))) +
+  theme_void() +
+  NULL
+
+```
+Try sankey plot using this guide[https://r-graph-gallery.com/321-introduction-to-interactive-sankey-diagram-2.html]
+
+
+```{r,eval=FALSE}
+# https://www.displayr.com/how-to-create-sankey-diagrams-from-tables-using-r/
+
+# https://stackoverflow.com/questions/44132423/creating-a-sankey-diagram-using-networkd3-package-in-r
+library(networkD3)
+
+df_sank <- meta_clin %>%
+  #dplyr::select(pt_idx, T_stage, cohort, diag_glsn_sum) %>%
+  # Simplify
+  dplyr::mutate(T_stage = 
+                  case_when(str_detect(T_stage, "T1") ~ "T1",
+                            str_detect(T_stage, "T2") ~ "T2",
+                            str_detect(T_stage, "T3") ~ "T3",
+                            str_detect(T_stage, "T4") ~ "T4",
+                            str_detect(T_stage, "TX") ~ "TX",
+                            TRUE ~ "Unknown"),
+                cohort = 
+                  case_when(str_detect(cohort, "A") ~ "A",
+                            str_detect(cohort, "B") ~ "B",
+                            str_detect(cohort, "C") ~ "C",
+                            str_detect(cohort, "D") ~ "D"),
+                glsn_bin = 
+                  case_when(diag_glsn_sum >=  8 ~ "above_8",
+                            diag_glsn_sum <=  7 ~ "below_7"),
+                cohort_main = 
+                  case_when(cohort == "A"~ "Local",
+                            cohort %in% c("B", "C", "D") ~ "Metas")) %>%
+  dplyr::select(pt_idx, cohort_main, glsn_bin, initial_local_tx_type, cohort)
+
+
+links <-
+  df_sank %>%
+  mutate(row = row_number()) %>%  # add a row id
+  pivot_longer(-row, names_to = "column", values_to = "source") %>%  # gather all columns
+  mutate(column = match(column, names(df))) %>%  # convert col names to col ids
+  group_by(row) %>%
+  mutate(target = lead(source, order_by = column)) %>%  # get target from following node in row
+  ungroup() %>% 
+  filter(!is.na(target))  # remove links from last column in original data
+
+```
+
+## Detailed annotation
+
+Some somaples were collected from the same patient at mulitple timpoint. We create a unique ID for this patient
+
+
+```{r}
+meta_samp <- meta_samp %>%
+  dplyr::mutate(UniqID = paste(pt_idx, biobank_timepoint, sep="_"))
+
+pt_cohort_A <- dat_anno %>% dplyr::filter(cohort_simple == "A") %>% pull(pt_idx)
+pt_cohort_B <- dat_anno %>% dplyr::filter(cohort_simple == "B") %>% pull(pt_idx)
+
+
+# Separate some columns 
+df.wide_1 <- dat_anno %>% 
+  dplyr::select(pt_idx, 
+                cohort_a_tx_status_s1) %>%
+                #cohort_b_tx_status_s1,cohort_b_tx_status_s2, cohort_b_tx_status_s3) %>%
+  pivot_longer(cols = starts_with("cohort_a_tx_status_s"),
+               names_to = "time") %>%
+  dplyr::filter(pt_idx %in% pt_cohort_A) %>%
+  dplyr::mutate(cohort = "A",
+                time = gsub("cohort_a_tx_status_s", "", time)) %>%
+  dplyr::rename(tx_value = value) %>%
+  dplyr::filter(!tx_value == "N/A")
+
+
+df.wide_2 <- dat_anno %>% 
+  dplyr::select(pt_idx, 
+                #cohort_a_tx_status_s1, 
+                cohort_b_tx_status_s1,cohort_b_tx_status_s2, cohort_b_tx_status_s3) %>%
+  pivot_longer(cols = starts_with("cohort_b_tx_status_s"),
+               names_to = "time") %>%
+  dplyr::filter(pt_idx %in% pt_cohort_B) %>%
+  dplyr::mutate(cohort = "B",
+                time = gsub("cohort_b_tx_status_s", "", time)) %>%
+  dplyr::rename(tx_value = value) %>%
+  dplyr::filter(!tx_value == "N/A")
+
+
+df.wide <- rbind(df.wide_1, df.wide_2)
+df.wide_sub <- df.wide %>% dplyr::select(-cohort)
+```
+
+
+Re-generate sankey
+
+
+```{r}
+df_sank <- dat_anno %>%
+  dplyr::left_join(df.wide_sub) %>%
+  #dplyr::group_by(cohort_main, cohort_simple, tx_value) %>%
+  dplyr::group_by(cohort_main, cohort_simple, glsn_bin, tx_value) %>%
+  dplyr::summarise(Freq=n()) %>%
+  dplyr::mutate(
+    tx_value= 
+      case_when(is.na(tx_value) ~ "not sure",
+                TRUE ~ tx_value),
+    tx_value = factor(tx_value, levels = c("pre treatment", "post treatment", "not sure")))
+
+
+# Basic plot
+ggplot(data = df_sank,
+       aes(y=Freq,
+           axis1 = cohort_main, 
+           axis2 = cohort_simple,
+           #axis3 = tx_value
+           axis3 = glsn_bin,
+           axis4 = tx_value
+           )) +
+  geom_alluvium(aes(fill = cohort_simple)) +
+  geom_stratum() +
+  geom_text(stat = "stratum",
+            aes(label = after_stat(stratum))) +
+  theme_void() +
+  NULL
+
+# Repeat
+
+df_sank <- dat_anno %>%
+  dplyr::left_join(df.wide_sub) %>%
+  dplyr::group_by(cohort_simple, glsn_bin,  tx_value) %>%
+  dplyr::summarise(Freq=n()) %>%
+    dplyr::mutate(
+    tx_value= 
+      case_when(is.na(tx_value) ~ "not sure",
+                TRUE ~ tx_value),
+    tx_value = factor(tx_value, levels = c("pre treatment", "post treatment", "not sure")))
+
+
+
+# Basic plot
+ggplot(data = df_sank,
+       aes(y=Freq,
+           axis1 = glsn_bin, 
+           axis2 = cohort_simple,
+           axis3 = tx_value
+           #axis4 = initial_local_tx_type
+           )) +
+  geom_alluvium(aes(fill = cohort_simple)) +
+  geom_stratum() +
+  geom_text(stat = "stratum",
+            aes(label = after_stat(stratum))) +
+  theme_void() +
+  NULL
+```
+
+
+# Objective 2
+
+We perform DE to identify protein expression of interest. First link the sampleID to to the annotation file. 
+
+
+```{r}
+meta_samp2 <- meta_samp %>% dplyr::mutate(SampleID = as.character(sample_id)) %>%
+  dplyr::select(pt_idx, SampleID, cohort) %>%
+  dplyr::mutate(
+    cohort_main = 
+      case_when(str_detect(cohort, "A") ~ "A",
+                str_detect(cohort, "B") ~ "B",
+                str_detect(cohort, "C") ~ "C",
+                str_detect(cohort, "D") ~ "D"),
+    c_a = case_when(cohort_main == "A" ~ "Y", TRUE ~ "N"),
+    c_b = case_when(cohort_main == "B" ~ "Y", TRUE ~ "N"),
+    c_c = case_when(cohort_main == "C" ~ "Y", TRUE ~ "N"),
+    c_d = case_when(cohort_main == "D" ~ "Y", TRUE ~ "N")
+  )
+dat_NPX_anno <- dat_NPX %>%
+  #dplyr::left_join(meta_samp, by=c("SampleID" = "sample_id"))
+  dplyr::left_join(meta_samp2)
+```
+
+
+Perform DE
+
+```{r}
+dat_NPX_anno2 <- dat_NPX_anno %>%
+  dplyr::filter(!str_detect(SampleID, 'SC')) 
+dat_tt_ca <- 
+  olink_ttest(df = dat_NPX_anno2,
+              variable = 'c_a')
+
+
+# ---------- #
+# Add fold change 
+# ---------- #
+# https://www.biostars.org/p/342756/
+
+# As the NPX vallues are log2 transformed already, to get FC, we minus the two log2 values
+
+# Get the average expression per group
+dat_tt_g <- dat_NPX_anno2 %>%
+  dplyr::group_by(OlinkID, c_a) %>%
+  dplyr::summarise(NPX_mean = mean(NPX))
+
+# Convert to wide format
+dat_tt_g_w <- dat_tt_g %>%
+  tidyr::pivot_wider(names_from = c_a, values_from = NPX_mean) %>%
+  dplyr::rename(Mean_N = N,
+                Mean_Y= Y) %>%
+  dplyr::mutate(log2FC = Mean_Y - Mean_N)
+
+
+
+dat_tt_ca <- dat_tt_ca %>%
+  dplyr::left_join(dat_tt_g_w)
+
+# Simplify output
+dat_tt_g_w_sub <- dat_tt_ca %>%
+  dplyr::select(Assay, OlinkID, UniProt, Panel, p.value, Adjusted_pval, Threshold, Mean_Y, Mean_N, log2FC)
+
+write.csv(dat_tt_g_w_sub, 
+          file.path(wd$output, "coA_vs_co_rest.csv"))
+```
+
+Get basic stats
+
+```{r}
+# Num Sig
+num_sig <-  sum(dat_tt_g_w_sub$Threshold == "Significant")
+df_up <-  dat_tt_g_w_sub %>% dplyr::filter(Threshold == "Significant" & log2FC >= 0)
+df_dwn <-  dat_tt_g_w_sub %>% dplyr::filter(Threshold == "Significant" & log2FC <= 0)
+
+df_stats <- data.frame(
+  NumSig = num_sig,
+  NumUp = nrow(df_up),
+  NumDwn = nrow(df_dwn))
+```
+
+## Visualize 
+
+Plot example genes
+
+```{r}
+top5_up <- df_up %>% slice_min(Adjusted_pval, n=5, with_ties=FALSE) %>% pull(Assay)
+top5_dwn <- df_dwn %>% slice_min(Adjusted_pval, n=5, with_ties=FALSE) %>% pull(Assay)
+
+top <- c(top5_up, top5_dwn)
+
+df_plot <- dat_NPX_anno2 %>%
+  dplyr::filter(Assay %in% top) %>%
+  dplyr::mutate(Assay = factor(Assay, levels = top))
+
+p_viol_gene <- 
+  df_plot %>%
+  ggplot(aes(x = cohort_main, y = NPX, fill = cohort_main)) +
+  geom_quasirandom(dodge.width=0.9, colour="grey30", alpha=0.5) +
+  geom_violin(alpha = 0.5, scale = "width", position = position_dodge(width = 0.9)) +
+  geom_boxplot(outlier.alpha = 0,  width = 0.2, coef=0,
+               position = position_dodge(width = 0.9)) +
+  scale_fill_manual(values=unique(pal.cohort_main)) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank"),
+        axis.text.x = element_text(angle = 0, hjust = 1)) +
+  facet_wrap(~Assay, ncol=5, scales = "free_y") +
+  #scale_y_continuous(limits = c(0,12),
+  #                   breaks = c(0,5,10)) +
+  xlab("cohort") +
+  NULL
+
+p_viol_gene
+
+```
+
+Heatmap of all genes
+
+
+Convert the Olink data to a gene x cell matrix
+
+```{r}
+mat_olink <- dat_NPX_anno2 %>%
+  dplyr::select(SampleID, OlinkID, NPX) %>%
+  # Remove contraol samples
+  dplyr::filter(!str_detect(SampleID, 'CONTROL_SAMPLE')) %>% 
+  # Convert to wide
+  tidyr::pivot_wider(names_from = SampleID, values_from = NPX)
+
+# Add gene annotation, and remove duplicated genes
+
+# df with gene and olink annotaiton
+dat_tmp <- dat_NPX_anno2 %>%
+  dplyr::select(OlinkID, Assay)
+
+
+mat_olink <- mat_olink %>%
+  dplyr::left_join(dat_tmp) %>%
+  dplyr::distinct(Assay, .keep_all = TRUE) %>%
+  dplyr::select(-OlinkID)
+
+# Add rownams as gene name
+mat_olink <- as.data.frame(mat_olink)
+row.names(mat_olink) <- mat_olink$Assay
+mat_olink <- mat_olink %>%
+  dplyr::select(-Assay)
+mat_olink <- as.matrix(mat_olink)
+```
+
+
+Very basic heatmap
+
+```{r}
+mat_sub <- mat_olink[row.names(mat_olink) %in% c(df_up$Assay, df_dwn$Assay), ]
+#mat_sub <- mat_olink[row.names(mat_olink) %in% top, ]
+#mat_sub <- mat_olink
+
+pheatmap(mat_sub, scale="row")
+```
+
+
+More advanced and pretty heatmap
+
+
+```{r}
+# ---------------------- #
+# Set up annotations
+# ---------------------- #
+
+# Create annotation df
+# df with link bewtween ptx_id and sampleID
+meta_samp_sub <- meta_samp2 %>%
+  dplyr::select(pt_idx, SampleID)
+
+# Remove unecessary columns
+kk <- dat_anno %>%
+  dplyr::select(pt_idx, cohort_simple, diag_glsn_sum) %>%
+  dplyr::distinct(.keep_all = TRUE) %>%
+  # Join with the linking ID
+  dplyr::left_join(meta_samp_sub)
+  
+
+# Columns we want to show on heatmap
+  ann_col <- data.frame(Cell = kk$SampleID,
+                        cohort = kk$cohort_simple)
+                        #glsn = kk$diag_glsn_sum)
+  ann_col2 <- ann_col
+  row.names(ann_col) <- ann_col$Cell
+  ## Colours
+  # Remove the cell column
+  ann_col <- dplyr::select(ann_col, !Cell) # Remove cell column
+  # Specify the colours for the population
+  ann_list <- list(
+  #  cohort = c("A" = "#F8766D",
+  #             "B" = "#7CAE00",
+  #             "C" = "#00BFC4",
+  #             "D" = "#C77CFF"))
+      cohort = c("A" = pal.cohort_main[1],
+               "B" = pal.cohort_main[2],
+               "C" = pal.cohort_main[3],
+               "D" = pal.cohort_main[4]))
+ 
+# ----------------- #
+# Scaling values
+# ----------------- #
+
+# Scale heatmap
+  pheatmap.scale <- function(x) {
+    m = apply(x, 1, mean, na.rm = T)
+    s = apply(x, 1, sd, na.rm = T)
+    return((x - m) / s)
+  }
+  
+mat22 <- pheatmap.scale(mat_sub)
+
+# Colour shceme
+paletteLength <- 30
+mypalette1 <- rev(paletteer::paletteer_c('ggthemes::Red-Blue Diverging', paletteLength))
+myColor <- mypalette1
+
+myBreaks <- c(seq(-2, 0, 
+                      length.out=ceiling(paletteLength/2) + 1), 
+                  seq(2/paletteLength, 
+                      2, length.out=floor(paletteLength/2)))
+  
+p_heat <- 
+    pheatmap(mat22, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE)
+  
+```
+
+
+Try to re-order the matrix
+
+
+```{r}
+# Re arrange
+kk_or <- kk %>% dplyr::arrange(cohort_simple, desc(diag_glsn_sum))
+mat22 <- mat22[,kk_or$SampleID]
+
+
+p_heat <- 
+    pheatmap(mat22, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = FALSE,
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE)
+```
+
+
+## More global
+
+
+```{r}
+dat_NPX_anno2 %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort_main", byPanel = FALSE, quiet = FALSE) 
+```
+
+Remove outlier
+
+```{r}
+pp <- dat_NPX_anno2 %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort_main", byPanel = FALSE, quiet = FALSE) 
+
+plot_df <- pp[[1]]$data
+
+plot_df <- plot_df %>%
+  dplyr::filter(PCY >= 0.2)
+
+
+dat_NPX_anno2_sub <- dat_NPX_anno2 %>%
+  dplyr::filter(!SampleID %in% row.names(plot_df))
+```
+
+
+```{r}
+dat_NPX_anno2_sub %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort_main", byPanel = FALSE, quiet = FALSE) 
+```
+
+
+## All DE
+
+Write function
+
+
+```{r}
+t.testDir <- wd$output
+t.test_cat <- function(dat, cat){
+  
+  print(paste0("t-test on ", cat))
+  
+  dat1 <- dat # %>%
+    #dplyr::filter(!!as.name(cat) %in% c("Severe", "None_Mild") )
+  
+  dat2 <- 
+    olink_ttest(df = dat1,
+                variable = cat)
+  
+
+# ---------- #
+# Add fold change 
+# ---------- #
+  
+# Get the average expression per group
+dat1_g <- dat1 %>%
+  dplyr::group_by(OlinkID, !!as.name(cat)) %>%
+  dplyr::summarise(NPX_mean = mean(NPX))
+
+# Convert to wide format
+dat1_w <- dat1_g %>%
+  tidyr::pivot_wider(names_from = !!as.name(cat), values_from = NPX_mean) %>%
+  dplyr::rename(Mean_N = N,
+                Mean_Y= Y) %>%
+  dplyr::mutate(log2FC = Mean_Y - Mean_N)
+
+
+
+dat_tmp <- dat2 %>%
+  dplyr::left_join(dat1_w)
+
+  
+# Simplify output
+  dat3 <- dat_tmp %>%
+    dplyr::select(Assay, OlinkID, UniProt, Panel, p.value, Adjusted_pval, Threshold, Mean_Y, Mean_N, log2FC)
+  
+  write.csv(dat3, 
+          file.path(t.testDir, 
+                    paste0("Rest_vs_", cat, ".csv")))
+  
+  return(dat3)
+  
+}
+```
+
+Run function
+
+
+```{r}
+sel_cat <- c("c_a", "c_b", "c_c", "c_d")
+
+
+p_list <- list()
+
+for (i in seq_along(sel_cat)){
+  t.tes_res <- t.test_cat(dat_NPX_anno2, sel_cat[i])
+  
+  p_list[[i]]  <- t.tes_res
+}
+
+p_list_base <- p_list
+```
+
+Extract the genes
+
+```{r}
+l1 <- p_list[[1]]
+l2 <- p_list[[2]] 
+l3 <- p_list[[3]] 
+l4 <- p_list[[4]] 
+
+
+l1_p <- l1 %>% dplyr::filter(p.value <= 0.05) %>% pull(Assay)
+l2_p <- l2 %>% dplyr::filter(p.value <= 0.05) %>% pull(Assay)
+l3_p <- l3 %>% dplyr::filter(p.value <= 0.05) %>% pull(Assay)
+l4_p <- l4 %>% dplyr::filter(p.value <= 0.05) %>% pull(Assay)
+
+
+# Based on FDR
+FDR_cut <- 0.05
+l1_FDR <- l1 %>% dplyr::filter(Adjusted_pval <= FDR_cut) %>% pull(Assay)
+l2_FDR <- l2 %>% dplyr::filter(Adjusted_pval <= FDR_cut) %>% pull(Assay)
+l3_FDR <- l3 %>% dplyr::filter(Adjusted_pval <= FDR_cut) %>% pull(Assay)
+l4_FDR <- l4 %>% dplyr::filter(Adjusted_pval <= FDR_cut) %>% pull(Assay)
+
+```
+
+
+Summary of t-test
+
+```{r}
+df_t_test <- data.frame(
+  row.names = sel_cat,
+  p_0.05 = c(length(l1_p),
+             length(l2_p),
+             length(l3_p),
+             length(l4_p)),
+  FDR_0.10 = c(length(l1_FDR),
+             length(l2_FDR),
+             length(l3_FDR),
+             length(l4_FDR))
+) #%>% dplyr::arrange(desc(p_0.05))
+
+write.csv(df_t_test, file.path(t.testDir, "t_test_summary.csv"))
+
+knitr::kable(df_t_test, "simple")
+```
+
+
+## Overlap
+
+We use the OlinkID to create the overlap table
+
+```{r}
+o1 <- l1 %>% dplyr::filter(p.value <= 0.05) %>% pull(OlinkID)
+o2 <- l2 %>% dplyr::filter(p.value <= 0.05) %>% pull(OlinkID)
+o3 <- l3 %>% dplyr::filter(p.value <= 0.05) %>% pull(OlinkID)
+o4 <- l4 %>% dplyr::filter(p.value <= 0.05) %>% pull(OlinkID)
+```
+
+Compile into a simplified table
+
+```{r}
+combined_o <- purrr::reduce(list(
+
+  data.frame(gene=l1_FDR, coh_a=1),
+  data.frame(gene=l2_FDR, coh_b=1),
+  data.frame(gene=l3_FDR, coh_c=1),
+  data.frame(gene=l4_FDR, coh_d=1)
+
+
+  
+  ), full_join)
+combined_o[is.na(combined_o)] <- 0
+
+combined_o <- combined_o %>%
+  dplyr::distinct(gene, .keep_all = TRUE)
+
+
+# Merge with additional info
+dat_sub <- dat_NPX_anno2 %>% dplyr::select(OlinkID, UniProt, Assay, Panel) %>%
+  dplyr::distinct(.keep_all = TRUE)
+
+combined_o <- combined_o %>%
+  dplyr::rename(OlinkID = gene) %>%
+  dplyr::left_join(dat_sub)
+
+
+write.csv(combined_o, file.path(t.testDir, "ProteinSignature_OlinkID.csv"))
+```
+
+Draw venn overlap
+
+```{r}
+
+
+l_all <- list(
+  coh_a = l1_FDR,
+  coh_b = l2_FDR,
+  coh_c = l3_FDR,
+  coh_d = l4_FDR
+)
+
+```
+
+
+```{r}
+pdf(file.path(t.testDir, "Venn_cat.pdf"),width = 7, height = 6.5)
+venn(l_all, ilab=TRUE, zcolor = "style")
+dev.off()
+```
+
+Draw upsetR overlap
+
+```{r}
+pdf(file.path(t.testDir, "UpSet_cat.pdf"),width = 7, height = 5)
+UpSetR::upset(fromList(l_all), nsets=4,order.by = "freq")
+dev.off()
+```
+
+
+Heatmap
+
+
+```{r}
+mat_sub <- mat_olink[row.names(mat_olink) %in% unique(unlist(l_all)), ]
+
+
+# ---------------------- #
+# Set up annotations
+# ---------------------- #
+
+# Create annotation df
+# df with link bewtween ptx_id and sampleID
+meta_samp_sub <- meta_samp2 %>%
+  dplyr::select(pt_idx, SampleID)
+
+# Remove unecessary columns
+kk <- dat_anno %>%
+  dplyr::select(pt_idx, cohort_simple, diag_glsn_sum) %>%
+  dplyr::distinct(.keep_all = TRUE) %>%
+  # Join with the linking ID
+  dplyr::left_join(meta_samp_sub)
+  
+
+
+ 
+# ----------------- #
+# Scaling values
+# ----------------- #
+
+# Scale heatmap
+  pheatmap.scale <- function(x) {
+    m = apply(x, 1, mean, na.rm = T)
+    s = apply(x, 1, sd, na.rm = T)
+    return((x - m) / s)
+  }
+  
+mat22 <- pheatmap.scale(mat_sub)
+
+# Colour shceme
+paletteLength <- 30
+mypalette1 <- rev(paletteer::paletteer_c('ggthemes::Red-Blue Diverging', paletteLength))
+myColor <- mypalette1
+
+myBreaks <- c(seq(-2, 0, 
+                      length.out=ceiling(paletteLength/2) + 1), 
+                  seq(2/paletteLength, 
+                      2, length.out=floor(paletteLength/2)))
+  
+p_heat <- 
+    pheatmap(mat22, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE)
+```
+
+
+```{r}
+# Re arrange
+kk_or <- kk %>% dplyr::arrange(cohort_simple, desc(diag_glsn_sum))
+mat22_or <- mat22[,kk_or$SampleID]
+
+
+p_heat <- 
+    pheatmap(mat22_or, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = FALSE,
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE)
+```
+
+```{r}
+save.image(file.path(outDir, "R_image.Rdata"))
+```
+
+
+# Others
+
+```{r}
+dat_anno_sub <- dat_anno %>%
+  dplyr::select(pt_idx, glsn_bin) #%>%
+  #dplyr::left_join(df.wide_sub) %>%
+  #dplyr::select(-time) %>%
+  #dplyr::distinct(.keep_all = TRUE)
+
+dat_NPX_anno2 %>% dplyr::filter(c_a == "Y") %>%
+  dplyr::left_join(dat_anno_sub) %>%
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "glsn_bin", byPanel = FALSE, quiet = FALSE) 
+
+
+
+dat_anno_sub <- dat_anno %>%
+  dplyr::select(pt_idx, glsn_bin) #%>%
+  #dplyr::left_join(df.wide_sub) %>%
+  #dplyr::select(-time) %>%
+  #dplyr::distinct(.keep_all = TRUE)
+
+dat_NPX_anno2 %>% dplyr::filter(c_a == "Y") %>%
+  dplyr::left_join(dat_anno_sub) %>%
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "glsn_bin", byPanel = FALSE, quiet = FALSE) 
+```
+
+
+
+
+# References
+
+NetworkD3[https://christophergandrud.github.io/networkD3/]
+Alluvial[https://corybrunson.github.io/ggalluvial/articles/ggalluvial.html]
+

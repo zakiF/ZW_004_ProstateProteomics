@@ -1,0 +1,596 @@
+---
+title: "Data cleaning"
+date: "2023-04-11"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+
+# Introduction
+
+[Manish Kohli](https://healthcare.utah.edu/fad/mddetail.php?physicianID=u6029853) generated data from Olink assay of Prostate cancer patients. The idea is to generate a landscape proteomics profile of prostate cancer progression.
+
+
+# Objective
+
+1. Clean up clinical data
+2. Create master annotation
+3. Simplify master annotation
+
+# Pre-processing 
+
+## Loading packages
+
+```{r, message=FALSE, warning=FALSE}
+library(devtools)
+library(here)
+library(tidyverse)
+library(readxl)   
+
+library(stringr)
+library(table1)
+```
+
+
+## Directories
+
+```{r}
+wd <- list()
+wd$main <- here()
+wd$data <- file.path(wd$main, "data")
+wd$manishData <- file.path(wd$data, "raw/data_fromManish")
+wd$hyejungData <- file.path(wd$data, "raw/data_fromHyejung")
+wd$output <- file.path(wd$main, "output")
+wd$script <- file.path(wd$main, "scripts")
+
+wd$outCurr <- file.path(wd$output, "00_metadata")
+wd$outData <- file.path(wd$output, "data")
+```
+
+Create directories
+
+```{r}
+if (!file.exists(wd$output )) {
+  dir.create(wd$output )
+} else {
+  print("Directory already exists")
+} 
+if (!file.exists(wd$outCurr)) {
+  dir.create(wd$outCurr)
+} else {
+  print("Directory already exists")
+}
+```
+
+
+## Load data
+
+There were 3 files provided by Manish, we detail them here and read into R.
+
+
+1. **2022_11_04_LS_prot_clin_data_ID**
+
+This file contains clinical data for each patients. One line per-patient. Variables such as PSA, cancer sub-group (cancer severity), treatment given. The unque patient ID is given at column `mrn` or `pt_idx`. 
+
+2. **2022_02_15_LS_prot_samples_ID_v4.5**
+
+This file contains metadata related to how samples were processed. Eg - date samples were collected, time point of collection (some patient samples were collected at mulitple time-points). One patient may have multiple lines of data if it has multiple timepoints. There is a column `mrn` or `pt_idx` that links to the NPX `sampleID` in file 3. 
+
+3. **E3072_AN00003660_AN00003661_NPX_2022-04-21-columns**
+
+This file is the NPX values from Olink. Samples are listed in the `SampleID` column
+
+```{r,eval=FALSE}
+# Read the files
+meta_clin <- readxl::read_excel(file.path(wd$manishData, "2022_11_04_LS_prot_clin_data_ID.xlsx"))
+meta_samp <- readxl::read_excel(file.path(wd$manishData, "2022_02_15_LS_prot_samples_ID_v4.5.xlsx"))
+dat_NPX <- readxl::read_excel(file.path(wd$manishData, "E3072_AN00003660_AN00003661_NPX_2022-04-21-columns.xlsx"))
+```
+
+
+Additionally, Hyejung, a PhD student in Mansh's group cleaned up the clinical data as well. This should be the most up to date data. So we read her data as well
+
+```{r}
+#dat1 <- read.csv(file.path(wd$hyejungData, "E3072_AN00003660_AN00003661_NPX_2022-04-21.csv"),sep = ";") #data for analysis
+ptData <- readxl::read_excel(file.path(wd$hyejungData, "2022_02_15_LS_prot_samples_ID_v4.5.xlsx"), sheet = 1) #patient characteristic data
+clinicData <- readxl::read_excel(file.path(wd$hyejungData, "2022_11_04_LS_prot_clin_data_ID.xlsx"), sheet = 1,na=c("N/A")) #clinical data
+# This is an older version of data, which we will extract two columns and append to the new data because the new data are missing those two coloumns.
+old.clinicData <- readxl::read_excel(file.path(wd$hyejungData, "2022_02_15_landscape_proteomics_combined_data_LIM_v4.0.xlsx"), sheet = "clinicalData",na=c("N/A")) 
+```
+
+
+# Objective 1
+
+**Clean up clinical data**
+
+We adapt a lot of Hyejung scripts to clean the data. The original scripts `0.Data celaing.R` is in our data folder.
+
+
+The newest clinicalData doesn't have "first_tx_hspc_date" and "first_tx_hspc_type" columns, so we will get these dates from the old file and attach to the newest file.
+
+```{r}
+old.clinicData<-
+  old.clinicData %>% 
+  select(pt_idx, first_tx_hspc_date, first_tx_hspc_type)
+
+clinicData <- merge(clinicData, old.clinicData, by = "pt_idx")
+
+rm(old.clinicData)
+```
+
+Based on Hyejung notes, futher modify the following ;
+
+
+1. Patient number 99 has wrong record. 
+
+first_tx_hspc_datae = 2009-04-20, this is wrong. Change it. 
+
+```{r}
+clinicData$first_tx_hspc_date[clinicData$pt_idx==99]<-as.POSIXct("09/04/2020", format = "%m/%d/%Y", tz = "UTC")
+```
+
+2. mHSPC patients should have collected 2 samples, once before ADT treatment, once after ADT treatment.
+
+However, that's not the case for every mHSPC patients.
+
+> During the meeting with Manish on 2022 Dec. 01(Thur), he told me that if the patient had received the ADT treatment within 30 days of sample 1 date, it's okay, because the ADT treatment takes 30 days to kick in.
+
+```{r}
+View(
+  clinicData %>%
+    filter(cohort %in% c("B","B*","B**")) %>%
+    select(mrn,pt_idx, sample1_date, sample2_date, first_adt_mhspc_date)%>%
+    mutate("trt date - sample1 date"= difftime(first_adt_mhspc_date,sample1_date, units = "days")) %>% #time between 1st and 2nd serial samples
+    mutate("sample1_before_ADT" = ifelse(`trt date - sample1 date`>lubridate::days(-30), TRUE, FALSE)) #Is the date of 1st ADT treatment between first and second sample, based on "first_adt_mhspc_date" variable?
+)
+
+```
+
+So pt_idx 29, 106, 50 & 37 has the negative days. pt_idx 40 has NA date. Need to fix. 
+
+
+> Based on Email from Anna on 2022 Dec. 01 (Thur) 
+for pt_idx 37 is fine. pt_idx 29, change first date of mCRPC to 10/10/2020
+
+```{r}
+clinicData$first_adt_mhspc_date[clinicData$pt_idx==29]<-as.POSIXct("10/10/2020", format = "%m/%d/%Y", tz = "UTC")
+```
+
+**pt_idx 40**
+
+> Email from Manish on 2022/12/06
+pt_idx = 40: 5/11/2021 is both the sample 1 date and the date of start of the ADT (with a  drug called regulolix).
+
+>Email from Manish on 2022/12/014 on patinet 40 aain
+Take 2/24/2021 sample date as sample 1 date and 5/11/2021 as sample 2 date as regulolix acts immediately
+
+```{r}
+clinicData$first_adt_mhspc_date[clinicData$pt_idx==40]<-as.POSIXct("2/24/2021", format = "%m/%d/%Y", tz = "UTC")
+clinicData$sample1_date[clinicData$pt_idx==40]<-as.POSIXct("2/24/2021", format = "%m/%d/%Y", tz = "UTC")
+```
+
+ > Email from Manish on 2022/12/14: regulolix is a new type of ADT that came to us in 2021 and so yes record it as 1st tx hspc type. Take 2/24/2021 sample date as sample 1 date and 5/11/2021 as sample 2 date as regulolix acts immediately.
+
+```{r}
+clinicData$sample2_date[clinicData$pt_idx==40]<-as.POSIXct("05/11/2021", format = "%m/%d/%Y", tz = "UTC")
+```
+
+**pt_idx 35**
+
+> Anna's email on 2022 Nov 29th:
+That patient was initially categorized as cohort D, and had two samples drawn. During the reviews we did in mid-September (see emails in the attached pdf), the patient was re-classified as cohort C/subgroup 5a.
+
+```{r}
+clinicData %>%
+  filter(pt_idx==35) %>%
+  select(cohort,subgroup, sample1_date,sample2_date)
+```
+
+> Email from Manish on 2022/12/06: For  21728947 --- use 09/28/2020 sample as it is more "near" to the date of first mCRPC
+
+```{r}
+clinicData$sample2_date[clinicData$mrn=="21728947"] <- NA
+#remove second sample in ptData
+ptData<-ptData %>% 
+  filter(!(pt_idx==35 & serial_sample==2)) 
+```
+
+
+**pt_idx 106**
+
+> email from Manish on 2022/12/07.
+pt_idx = 106 should be changed from mHSPC to mCRPC.
+The reason is because he had been on ADT for a year before that and the 290 (my note: this is testosterone level) noted is NOT correct.
+He turned mCRPC on 12/18/2020 and was started on treatments for that stage—that date onwards.
+( Abiraterone + prednisone, 12/22/2020 through 10/19/2021.)
+
+
+> Email from Manish on 2022/12/14: 11/23/2020 sample date precedes treatment start date of 12/22/2020—so that is the pre-treatment date you should take
+From this email, I understood that we should change this sample to pre-treated mCRPC. In the previous email 2022/12/07, it wasn't clear whether we should make this person pre- or post-treated sample.
+
+```{r}
+clinicData$subgroup[clinicData$pt_idx==106]<-"5a"
+clinicData$cohort[clinicData$pt_idx==106]<-"C"
+clinicData$sample2_date[clinicData$pt_idx==106]<-NA
+```
+
+Get rid of 2nd & 3rd samples of pt_idx=106 from ptData as well
+
+```{r}
+ptData<-ptData %>% 
+  filter(!(pt_idx==106 & serial_sample%in%c(2,3))) 
+
+```
+
+
+> Email from Manish on 2022/12/14: change first_tx_mcrpc_type and subsequent_rx_regimen to Abiraterone + prednisone.
+
+```{r}
+clinicData$first_tx_mcrpc_type[clinicData$pt_idx==106]<-"Abiraterone+prednisone"
+clinicData$subsequent_rx_regimen[clinicData$pt_idx==106]<-"Abiraterone+prednisone"
+```
+
+
+```{r}
+#Two people classified as localized have first_tx_hspc_type. Why??
+# clinicData %>% 
+#   filter(cohort=="A") %>% 
+#   filter(first_tx_hspc_type!="None") %>% 
+#   select(mrn,cohort,first_tx_hspc_type, pt_idx, sample1_date,sample2_date,sample1_date)
+#Save the clinicData
+# write.csv(clinicData,"./Data/clinicData.csv", row.names = FALSE)
+```
+
+
+> 2023 Jan 09 email from Manish
+For MRN 2700961 –I am going to put this into local stage ( I am assuming the sample was collected in 2020)? - (in a follow up email, he confirmed with me to stay in local)
+For MRN 8497208—if the sample was collected around 07/2020—we should be re-classifying him in the mHSPC—even if he got iADT. - (in a follow up email, he confirmed with me to switch to mHSPC)
+
+MRN 8497208 is pt_idx 90
+
+To check these patietns
+
+```{r}
+# clinicData %>% 
+#   filter(mrn=="02700961") %>% 
+#   select(sample1_date,sample2_date,sample3_date) #collected on 2021-05-26
+# 
+# clinicData %>% 
+#   filter(mrn=="08497208") %>% 
+#   select(sample1_date,sample2_date,sample3_date) #collected on 2021-05-04
+```
+
+Change the group based on Manish email
+
+```{r}
+clinicData$subgroup[clinicData$mrn=="08497208"]<-"1"
+clinicData$cohort[clinicData$mrn=="08497208"]<-"B"
+```
+
+
+> Only one sample has been collected for this person. Is this pre- or post-treatment sample?
+
+```{r}
+clinicData %>%
+  filter(mrn=="08497208") %>%
+  select(sample1_date, first_adt_mhspc_date, first_tx_hspc_date)
+
+clinicData %>%
+  filter(mrn=="08497208") %>%
+  select(sample1_date, first_adt_mhspc_date, first_tx_hspc_date, first_tx_hspc_type) %>%
+  mutate(time_from_tx_to_sample2=difftime(first_adt_mhspc_date,sample1_date))
+```
+
+
+> Seems like post-treatment date. So change sample1_date to sample2_date.
+
+```{r}
+clinicData$sample2_date[clinicData$mrn=="08497208"]<-clinicData$sample1_date[clinicData$mrn=="08497208"]
+clinicData$sample1_date[clinicData$mrn=="08497208"]<-NA
+ptData$serial_sample[ptData$mrn=="08497208"]<-2
+```
+
+> Below to be decided during the meeting on 2023 Jan 12 (Thur) - to keep MRN 08497208 or not
+E mail from Manish on 2023 Jan 11 (Wed)
+About MRN = 08497208.
+Since the pt has only one (post-treatment) sample collected on 5/4/21 you are right we wont be able to do the pair-wise testing—lets drop him from mHSPC group completely. And from all the analyses
+
+
+```{r}
+clinicData<-clinicData %>% filter(mrn !="08497208")
+ptData<-ptData %>% filter(mrn !="08497208")
+```
+
+More changes 2023-04-12
+
+> From Manish's email 
+  05173976          
+ This patient is group B, he has low volume Tx naïve metastatic HSPC disease.
+ 02700961          
+ This patient is also group B, he had s low volume mHSPC disease
+
+Change the group based on Manish email
+
+```{r}
+clinicData$subgroup[clinicData$mrn=="05173976"]<-"1"
+clinicData$cohort[clinicData$mrn=="05173976"]<-"B"
+
+clinicData$subgroup[clinicData$mrn=="02700961"]<-"1"
+clinicData$cohort[clinicData$mrn=="02700961"]<-"B"
+```
+
+
+## QC
+
+> Make sure everyone has at least one (and first) sample.
+
+```{r}
+sum(is.na(clinicData$sample1_date)) #Yes. all have sample1_date.
+```
+
+
+> Make sure that there are only:
+  #1 sample for cohort A
+  #max 2 samples for cohort B
+  #1 sample for cohort C
+  #max 2 samples for cohort D
+for each patient.
+
+```{r}
+unique(clinicData$cohort)
+sum(is.na(clinicData$sample1_date[clinicData$cohort=="A"])) #all cohort A have sample 1 date
+sum(!is.na(clinicData$sample2_date[clinicData$cohort=="A"])) #no cohort A has sample 2 date
+
+sum(is.na(clinicData$sample1_date[clinicData$cohort%in%c("B","B**", "B*")])) #One person in cohort B is missing sample 1 date
+sum(is.na(clinicData$sample2_date[clinicData$cohort%in%c("B","B**", "B*")])) #all cohort B have sample 2 date
+# `the 2 tht dont have sample2 date is the newly classed cohor (Manish email in April 2023)
+
+sum(is.na(clinicData$sample1_date[clinicData$cohort=="C"])) #all cohort C have sample 1 date
+sum(!is.na(clinicData$sample2_date[clinicData$cohort=="C"])) #no cohort C has sample 2 date
+
+
+sum(is.na(clinicData$sample1_date[clinicData$cohort%in%c("D","D*")])) #all cohort B have sample 1 date
+sum(is.na(clinicData$sample2_date[clinicData$cohort%in%c("D","D*")])) #3 cohort D are missing sample 2 dates. 
+
+table(clinicData$cohort)
+table(clinicData$subgroup)
+```
+
+
+# Objective 2
+
+**Create master annotation**
+
+> Manish told me that we will not use 3rd sample for the analysis. 
+
+
+```{r}
+ptData<-ptData %>% 
+  filter(serial_sample!=3)
+```
+
+
+We want to create a table that combines patient information with sample information
+
+```{r}
+#clinicData is patient level and ptData is sample level.
+long_clinicData<-clinicData %>% 
+  tidyr::gather(key="serial_sample", value="collection_date",c("sample1_date","sample2_date")) %>%  #we will not include sample3.
+  mutate(serial_sample=readr::parse_number(serial_sample)) %>% 
+  filter(!is.na(collection_date))  #get rid of all the rows missing collection date => this means that sample was never collected. 
+
+```
+
+
+```{r}
+#to see if the two data sets have same patient and sample collections,
+#we generate a new variable pt_num and compare them
+ptData$pt_num<-paste(ptData$pt_idx,ptData$serial_sample,sep="_")
+long_clinicData$pt_num<-paste(long_clinicData$pt_idx,long_clinicData$serial_sample,sep="_")
+
+```
+
+
+```{r}
+#Check if any pt_num in ptData does not appear in long_clinicData
+table(ptData$pt_num %in% long_clinicData$pt_num) #yes. all ptData samples appear in clinicData.
+#Check the opposite. Check if any pt_num in long_clinicData does not appear in ptData 
+table(long_clinicData$pt_num %in% ptData$pt_num) #yes. all clinical data samples appear in the the ptData. 
+
+```
+
+```{r}
+#We can fuse these two datasets together. 
+#We only need sample ID and well ID from ptData. Because it's the clinical data we want to fuse with NPX data and clinical data doesn't have sample_ID.
+final_ptData<-merge(ptData %>% select(pt_num,sample_id,well_id), long_clinicData, by="pt_num")
+```
+
+
+# Objective 3
+
+**Simplify master annotation** 
+
+Here we want to modify the columns to create a simpler annotation for analysis
+
+```{r}
+dat <- final_ptData
+```
+
+> Tendga's code modified by Hyejung 
+
+```{r}
+wd_tmp <- dat %>% 
+  mutate_at(stringr::str_subset(colnames(wd),"date"), function(x){as.Date(x, format = "%Y-%m-%d")}) %>%  #convert the POXIT to Date class to create table later on
+  mutate(diag_glsn_sum=as.numeric(diag_glsn_sum)) %>%  #change character to numeric
+  mutate(diag_glsn_sum_c = ifelse(diag_glsn_sum <8, 1, 
+                                  ifelse(diag_glsn_sum >=8, 2, NA)),
+         diag_glsn_sum_c = factor(diag_glsn_sum_c, levels=c('1','2'), labels=c('<8', '>=8'))) %>% #change to binary
+  mutate(#Change cohort to only A,B,C,D.
+    cohort2=case_when(cohort %in% c("B","B*","B**")~"B",
+                      cohort%in% c("D","D*")~"D",
+                      TRUE ~ as.character(cohort))) %>% 
+  mutate(#factorize cohort variable with correct labels
+    cohort2 = factor(cohort2,
+                     levels=c('A', 'B', 'C', 'D')),
+                     #labels=c('Localized Disease', 'Tx Naive mHSPC', 'Biochemical mCRPC', 'Clinical mCRPC')), 
+    de_novo_metastatic_stage = factor(de_novo_metastatic_stage, 
+                                      levels = c('Y', 'N')),
+                                      #labels = c('Metastatic', 'Nonmetastatic')),
+    subgroup = factor(subgroup,
+                      levels = c('0a', '0b', '0c', '1', '5a', '5b', '6a', '6b'))
+                      # labels = c('cohort A, aggressive (Gleason 8-10) disease', 
+                      #            'cohort A, Gleason 4+3 = 7', 
+                      #            'cohort A, Gleason 6 (N = 3) and 3+4 = 7',
+                      #            'all cohort B',
+                      #            'cohort C, treatment naive',
+                      #            'cohort C, on tx',
+                      #            'cohort D, pre/post first mCRPC treatment',
+                      #            'cohort D, pre/post later mCRPC treatment'))
+  )
+```
+
+
+## Variabls label
+
+
+> Scripts taken from Hyejung 
+
+```{r}
+df <- wd_tmp
+#get the variable name and label
+variable_label <- readxl::read_excel(file.path(wd$hyejungData, "2022_11_04_LS_prot_clin_data_ID.xlsx"), sheet = "DataDictionary",na=c("N/A")) #clinical data
+
+
+#unfortunatley, some of the variable names in the DataDictionary sheet are different than the actual data frame names. Change them manually.
+change.to.correct.name<-c("Wang_y_n","total_t_at_s1","total_t_at_s2","total_t_at_s3","ctc_date","cohort_A_tx_status_s1","cohort_B_tx_status_s1","cohort_B_tx_status_s2","cohort_B_tx_status_s3" )
+index<-c()
+for(i in change.to.correct.name){
+  index<-c(index, which(variable_label$variable_name==i))
+}
+variable_label$variable_name[index]<-
+  c("wang_y_n","total_testosterone_at_s1","total_testosterone_at_s2","total_testosterone_at_s3","ctc_s1_date","cohort_a_tx_status_s1","cohort_b_tx_status_s1","cohort_b_tx_status_s2","cohort_b_tx_status_s3")
+
+#now assign all labels. 
+for(i in 1:nrow(variable_label)){
+  this.index<-which(colnames(df)==variable_label$variable_name[i])
+  label(df[,this.index])<-variable_label$variable_label[i]
+  # label(df[[variable_label$variable_name[i]]])<-variable_label$variable_label[i]
+}
+
+
+my.render.cont <- function(x) {
+  with(stats.default(x), c("", "Median [Min, Max]" =
+                             sprintf("%0.1f [%0.1f, %0.1f]", MEDIAN, MIN, MAX)))
+}
+
+
+```
+
+
+Render a summary tabl
+
+```{r}
+
+
+t1_cross <-table1(~ 
+                    
+                    subgroup +                
+                    age_at_s1 +               
+                    psa_at_s1 +               
+                    psa_at_s2 +               
+                    #psa_at_s3 +               
+                    
+                    total_testosterone_at_s1 +
+                    total_testosterone_at_s2 +
+                    #total_testosterone_at_s3 +
+                    alk_phos_at_s1 +          
+                    alk_phos_at_s2 +          
+                    #alk_phos_at_s3 +          
+                    ldh_at_s1 +               
+                    ldh_at_s2 +               
+                    #ldh_at_s3 +              
+                    
+                    diag_glsn_sum_c +         
+                    death_y_n +               
+                    T_stage +                 
+                    de_novo_metastatic_stage +
+                    prog_type +               
+                    chaarted_volume +   
+                    current_rx_regimen +
+                    subsequent_rx_regimen +   
+                    initial_local_tx_type +   
+                    salvage_tx_type +         
+                    first_tx_hspc_type +  
+                    first_tx_mcrpc_type +   
+                    cohort_a_tx_status_s1 +
+                    cohort_b_tx_status_s1 +
+                    cohort_b_tx_status_s2 +   
+                    # cohort_b_tx_status_s3 +   
+                    mCRPC_tx_status_at_s1 +   
+                    wang_y_n |cohort2, render.continuous=my.render.cont, data = df, overall = FALSE)
+t1_cross
+```
+
+```{r}
+
+#Save the Table 1 data
+temp<-df %>% 
+  select(
+    pt_idx,
+    mrn,
+    subgroup,
+    age_at_s1,               
+    psa_at_s1,               
+    psa_at_s2,               
+    #psa_at_s3,               
+    
+    total_testosterone_at_s1,
+    total_testosterone_at_s2,
+    #total_testosterone_at_s3,
+    alk_phos_at_s1,          
+    alk_phos_at_s2,          
+    #alk_phos_at_s3,          
+    ldh_at_s1,               
+    ldh_at_s2,               
+    #ldh_at_s3,              
+    
+    diag_glsn_sum_c,         
+    death_y_n,               
+    T_stage,                 
+    de_novo_metastatic_stage,
+    prog_type,               
+    chaarted_volume,   
+    current_rx_regimen,
+    subsequent_rx_regimen,   
+    initial_local_tx_type,   
+    salvage_tx_type,         
+    first_tx_hspc_type,  
+    first_tx_mcrpc_type,   
+    cohort_a_tx_status_s1,
+    cohort_b_tx_status_s1,
+    cohort_b_tx_status_s2,   
+    # cohort_b_tx_status_s3,   
+    mCRPC_tx_status_at_s1,   
+    wang_y_n,
+    cohort2
+  )
+write.csv(temp, file.path(wd$outCurr, "table1_dat.csv"), row.names = FALSE)
+```
+
+
+Save data
+
+
+```{r}
+write.csv(variable_label,  file.path(wd$outData, "variable_levels.csv"))
+write.csv(df,  file.path(wd$outData, "metadata.csv"))
+```
+
+
+

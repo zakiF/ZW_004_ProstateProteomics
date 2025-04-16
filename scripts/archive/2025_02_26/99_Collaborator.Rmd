@@ -1,0 +1,845 @@
+---
+title: "Initial analysis"
+date: "2025-02-03"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+# Background
+
+Look at the expression of selcted proteins
+
+# Objectives
+
+
+
+# Pre-processing 
+
+## Loading packages
+
+```{r, message=FALSE, warning=FALSE}
+library(here)
+library(tidyverse)
+library(readxl)   
+library(readr)
+library(stringr)
+
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(gghighlight)
+library(ggbeeswarm)
+
+
+library(OlinkAnalyze) # install.packages("OlinkAnalyze")
+library(paletteer)
+
+# Survival
+library(survival)
+library(ggsurvfit)
+library(survminer)
+```
+
+
+## Directories
+
+```{r}
+wd <- list()
+wd$main <- here()
+wd$data <- file.path(wd$main, "data")
+wd$manishData <- file.path(wd$data, "raw/data_fromManish")
+wd$d2024 <- file.path(wd$data, "updated_2024")
+wd$d2024_npx <- file.path(wd$d2024, "NPX_data")
+wd$output <- file.path(wd$main, "output")
+wd$script <- file.path(wd$main, "scripts")
+
+wd$outData <- file.path(wd$output, "data")
+wd$outCurr <- file.path(wd$output, "99_Collab")
+```
+
+
+Create directories
+
+```{r}
+if (!file.exists(wd$outCurr)) {
+  dir.create(wd$outCurr)
+} else {
+  print("Directory already exists")
+}
+```
+
+Load functions
+
+```{r}
+source(file.path(wd$script, "functions.R"))
+```
+
+
+Colours
+
+```{r}
+pal.cohort.n <- c("#AEC7E8", "#FFBB78", "#98DF8A")
+pal.cohort.n2 <- c("#ff7f0e", "#1f77b4", "#2ca02c")
+
+pal.txt_stat <- c("lightblue", "orange")
+```
+
+## Load data
+
+Load the processed metadata file
+
+```{r}
+# TO DO - load the saved R object
+```
+
+## Survival metadata
+
+We need a date for the OS. The OS for each patient is calculated by subtracting the sample collection date to death date. We censor patients who have missing death date (presumed alive) by the last follow up date.
+
+```{r}
+censor_date <- as.Date('2024-11-14') # November 14, 2024
+```
+
+### Psomagen
+
+```{r}
+# Read in the Psomagen metadata
+meta_psom <- read_excel(meta_file, sheet = 2) %>% 
+  select(sample_id, 'MRN (UUHSC)', 'Death date', 'Deceased?', 'Sample1_date', 
+         'sample1_psa','sample1_ldh', 'sample1_alk_phos') %>% 
+  rename(mrn = 'MRN (UUHSC)',
+         death_date = 'Death date',
+         death = 'Deceased?',
+         collection_date = 'Sample1_date',
+         psa = 'sample1_psa',
+         ldh = 'sample1_ldh',
+         alk_ph = 'sample1_alk_phos')
+
+# Censor the date
+meta_psom$death_date[is.na(meta_psom$death_date)] <- censor_date
+
+# Calulate OS in months
+meta_psom <- meta_psom %>% 
+  mutate(OS = as.numeric(difftime(death_date, collection_date, units = "days")),
+         OS = round(OS/30.417, digit=2),
+         death = case_when(death == "No" ~ 0,
+                           death == "Yes" ~ 1),
+         sample_id = as.character(sample_id))
+```
+
+### Q-1335
+
+We just read the mCRPC project for now
+
+```{r}
+# Read in the Q-1335 metadata
+meta_q1335 <- read_excel(meta_file, sheet = 4) %>% 
+  select('Sample ID (validation)', 'MRN (UUHSC)', 'Death date', 'Deceased?', 'Sample 1 Date',
+         'sample1_psa', 'sample1_ldh', 'sample1_alk_phos') %>% 
+  rename(mrn = 'MRN (UUHSC)',
+         sample_id = 'Sample ID (validation)',
+         death_date = 'Death date',
+         death = 'Deceased?',
+         collection_date = 'Sample 1 Date',
+         psa = 'sample1_psa',
+         ldh = 'sample1_ldh',
+         alk_ph = 'sample1_alk_phos') %>% 
+  mutate(death = gsub("Yes", "Y", death))
+
+# Censor the date
+meta_q1335$death_date[is.na(meta_q1335$death_date)] <- censor_date
+
+# Calulate OS in months
+meta_q1335 <- meta_q1335 %>% 
+  mutate(OS = as.numeric(difftime(death_date, collection_date, units = "days")),
+         OS = round(OS/30.417, digit=2),
+         death = case_when(death == "N" ~ 0,
+                           death == "Y" ~ 1),
+         sample_id = as.character(sample_id))
+```
+
+### Q-15806
+
+```{r}
+meta_q1580 <- read_excel(meta_file, sheet = 7) %>% 
+  select('Plate_4_pt_ID', 'MRN (UUHSC)', 'Death date', 'Deceased?', 'Sample1_date',
+         'sample1_psa', 'sample1_ldh', 'sample1_alk_phos') %>% 
+  rename(mrn = 'MRN (UUHSC)',
+         sample_id = 'Plate_4_pt_ID',
+         death_date = 'Death date',
+         death = 'Deceased?',
+         collection_date = 'Sample1_date',
+         psa = 'sample1_psa',
+         ldh = 'sample1_ldh',
+         alk_ph = 'sample1_alk_phos') 
+
+# Censor the date
+meta_q1580$death_date[is.na(meta_q1580$death_date)] <- censor_date
+
+# Calulate OS in months
+meta_q1580 <- meta_q1580 %>% 
+  mutate(OS = as.numeric(difftime(death_date, collection_date, units = "days")),
+         OS = round(OS/30.417, digit=2),
+         death = case_when(death == "No" ~ 0,
+                           death == "Yes" ~ 1),
+         sample_id = as.character(sample_id))
+```
+
+## Combined metadata
+
+```{r}
+m1 <- meta_psom %>% 
+  mutate(Platform = "Psomagen") 
+  #mutate(sample_id = paste0("Ps_", sample_id))
+m2 <- meta_q1335 %>% 
+  mutate(Platform = "Q_13356") 
+  #mutate(sample_id = paste0("Q_13356_", sample_id))
+m3 <- meta_q1580 %>% 
+  mutate(Platform = "Q_15806")
+  #mutate(sample_id = paste0("Q_15806_", sample_id))
+
+meta_bridge <- rbind(m1, m2, m3)
+
+# Fix the PSA to numeric
+meta_bridge <- meta_bridge %>% 
+  mutate(psa = gsub("<", "", psa),
+         psa = as.numeric(psa),
+         ldh = as.numeric(ldh),
+         alk_ph = as.numeric(alk_ph))
+
+# Important to remove duplicated samples (bridging sample), retaining only 1
+# > TO DO - WHICH BRDGING TO REMOCVE
+# meta_bridge2<- meta_bridge %>% 
+#   filter(!sample_id %in% dat_sub$sample_id_psom)
+```
+
+
+# Bridging
+
+Lets do bridging analysis. We follow the workflow on Olink website - https://cran.r-project.org/web//packages/OlinkAnalyze/vignettes/bridging_introduction.html
+
+
+The bridging analysis only works with 2 dataset. Because we want to bridge between 3 datasets, we need to do the bridging twice. 
+
+## Q-13356 + Q-15806
+
+Set up the data
+
+```{r}
+dat_NPX <- readxl::read_excel(file.path(wd$d2024_npx, "batch_01_E3072_AN00003660_AN00003661_NPX_2022-04-21-columns.xlsx"))
+
+meta_psom_tmp <- meta_psom %>% select(-mrn) %>% 
+  dplyr::rename(SampleID = sample_id)
+
+
+df_meta <- df_pre_post %>%   
+  filter(!is.na(sample_id_psom)) %>% 
+  dplyr::rename(SampleID = sample_id_psom) %>% 
+  select(cohort, SampleID, txt_stat) %>% 
+  distinct() %>% 
+  mutate(SampleID = as.character(SampleID)) %>% 
+  left_join(meta_psom_tmp)
+
+# This removes control samples as well
+dat1_NPX_anno <- dat_NPX %>%
+  mutate(SampleID = as.character(SampleID)) %>% 
+  dplyr::left_join(df_meta) %>%
+  filter(!is.na(cohort))
+
+df_meta2 <- df_meta_f %>% 
+  filter(!is.na(sample_id_Q13356)) %>% 
+  # remove serial samples
+  #filter(!HCI_cID %in% serial_sam) %>% 
+  dplyr::rename(SampleID = sample_id_Q13356) %>% 
+  select(cohort, SampleID) %>% 
+  distinct() %>% 
+  mutate(SampleID = as.character(SampleID))
+
+# This removes conttol samples as well
+dat2_NPX_anno <- dat_NPX2 %>%
+  mutate(SampleID = as.character(SampleID)) %>% 
+  dplyr::left_join(df_meta2) %>%
+  filter(!is.na(cohort))
+
+
+df_meta3 <- df_meta_f %>% 
+  filter(!is.na(sample_id_Q15806)) %>% 
+  # remove serial samples
+  #filter(!HCI_cID %in% serial_sam) %>% 
+  dplyr::rename(SampleID = sample_id_Q15806) %>% 
+  select(cohort, SampleID) %>% 
+  distinct() %>% 
+  mutate(SampleID = as.character(SampleID))
+
+# This removes conttol samples as well
+dat3_NPX_anno <- dat_NPX3 %>%
+  mutate(SampleID = as.character(SampleID)) %>% 
+  dplyr::left_join(df_meta3) %>%
+  filter(!is.na(cohort))
+```
+
+
+
+Lets do the bridging
+
+```{r}
+xx1 <- dat2_NPX_anno
+xx2 <- dat3_NPX_anno
+
+xx1 <- xx1 %>% 
+  mutate(SampleID = paste0("Q_13356_", SampleID))
+
+xx2 <- xx2 %>% 
+  mutate(SampleID = paste0("Q_15806_", SampleID),)
+
+# Identify bridging samples
+hci_ids_br1 <- df_meta_f %>% filter(Q_13356 == "Y") %>% pull(HCI_cID)
+hci_ids_br2 <- df_meta_f %>% filter(Q_15806 == "Y") %>% pull(HCI_cID)
+int_ids <- intersect(hci_ids_br1, hci_ids_br2)
+
+
+df_ints <- df_meta_f %>% filter(HCI_cID %in% int_ids)
+
+br_1 <- df_ints %>% pull(sample_id_Q13356) %>% paste0("Q_13356_", .)
+br_2 <- df_ints %>% pull(sample_id_Q15806) %>% paste0("Q_15806_", .)
+
+
+overlap_sample_list <-list("DF1" = br_1,
+                           "DF2" = br_2)
+
+xx1.1 <- xx1 #%>% select(SampleID, OlinkID, UniProt, NPX, Panel, cohort)
+xx2.1 <- xx2 #%>% select(SampleID, OlinkID, UniProt, NPX, Panel, cohort)
+
+
+# Perform Bridging normalization
+npx_br_data <- olink_normalization(
+  df1 = xx1.1,
+  df2 = xx2.1,
+  overlapping_samples_df1 = br_1,
+  overlapping_samples_df2 = br_2,
+  df1_project_nr = "data1",
+  df2_project_nr = "data2",
+  reference_project = "data1")
+```
+
+Both method give the same result
+
+Quick PCA analysis
+
+```{r}
+# After bridging analysis  
+npx_after_br <- npx_br_data %>%
+  dplyr::mutate(Type = ifelse(SampleID %in% as.character(unlist(overlap_sample_list)), 
+                              paste0(Project, "_Bridge"),
+                              paste0(Project, "_Sample"))) %>%
+  dplyr:::mutate(SampleID = paste0(Project, SampleID))
+
+### PCA plot seperated by cohort
+p_pca_bridge1 <-
+  npx_after_br %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+```
+
+
+Show the bridging samples
+
+```{r}
+# Generate a matching sample matrix
+# Read matching samples
+mat_sam <- data.frame(
+  SampleID = c(br_1, br_2),
+  Matching = as.character( sprintf("%02d" ,1:nrow(df_ints)) )
+)
+
+# Extract PCA coordinate
+pca_cor_b <- p_pca_bridge1[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>%
+  mutate(Batch = gsub("data1.*", "batch_1", SampleID),
+         Batch = gsub("data2.*", "batch_2", Batch),
+         SampleID = gsub("data1", "", SampleID),
+         SampleID = gsub("data2", "", SampleID)) %>% 
+  # Combine with master annotation
+  left_join(mat_sam)
+
+```
+
+```{r}
+p2 <- 
+  ggplot(pca_cor_b, aes(x=PC1, y=PC2, colour=Batch)) +
+  geom_point() +
+  gghighlight(use_direct_label = FALSE) +
+  theme(legend.position = "right") +
+  facet_wrap(~Matching) +
+  theme_custom +
+  #scale_colour_manual(values=pal.study) + 
+  labs(title="Highlighting the Sequencing batch")
+p2
+```
+
+Plot the cohort
+
+```{r}
+ggplot(pca_cor_b, aes(x=PC1, y=PC2, colour=colors)) +
+  geom_point(size=2.5) +
+  ylab(p_pca_bridge1[[1]]$labels$y) +
+  xlab(p_pca_bridge1[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort) +
+  NULL
+```
+
+
+## Q-13356 + Psomagen
+
+Lets do the bridging
+
+```{r}
+xx1 <- dat2_NPX_anno
+xx2 <- dat1_NPX_anno
+
+xx1 <- xx1 %>% 
+  mutate(SampleID = paste0("Q_13356_", SampleID))
+
+xx2 <- xx2 %>% 
+  mutate(SampleID = paste0("Ps_", SampleID),)
+
+# Identify bridging samples
+hci_ids_br1 <- df_meta_f %>% filter(Q_13356 == "Y") %>% pull(HCI_cID)
+hci_ids_br2 <- df_meta_f %>% filter(Psomagen == "Y") %>% pull(HCI_cID)
+int_ids <- intersect(hci_ids_br1, hci_ids_br2)
+
+df_ints <- df_meta_f %>% filter(HCI_cID %in% int_ids)
+
+br_1 <- df_ints %>% pull(sample_id_Q13356) %>% paste0("Q_13356_", .)
+br_2 <- df_ints %>% pull(sample_id_psom) %>% paste0("Ps_", .)
+
+
+overlap_sample_list <-list("DF1" = br_1,
+                           "DF2" = br_2)
+
+xx1.1 <- xx1 #%>% select(SampleID, OlinkID, UniProt, NPX, Panel, cohort)
+xx2.1 <- xx2 #%>% select(SampleID, OlinkID, UniProt, NPX, Panel, cohort)
+
+# Perform Bridging normalization
+npx_br_data2 <- olink_normalization(
+  df1 = xx1.1,
+  df2 = xx2.1,
+  overlapping_samples_df1 = br_1,
+  overlapping_samples_df2 = br_2,
+  df1_project_nr = "data1",
+  df2_project_nr = "data2",
+  reference_project = "data1")
+```
+
+Quick PCA analysis
+
+```{r}
+# After bridging analysis  
+npx_br_data2 <- npx_br_data2 %>%
+  dplyr::mutate(Type = ifelse(SampleID %in% as.character(unlist(overlap_sample_list)), 
+                              paste0(Project, "_Bridge"),
+                              paste0(Project, "_Sample"))) %>%
+  dplyr:::mutate(SampleID = paste0(Project, SampleID))
+
+### PCA plot seperated by cohort
+p_pca_bridge2 <-
+  npx_br_data2 %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort", byPanel = FALSE, quiet = FALSE) 
+```
+
+
+Show the bridging samples
+
+```{r}
+# Generate a matching sample matrix
+# Read matching samples
+mat_sam <- data.frame(
+  SampleID = c(br_1, br_2),
+  Matching = as.character( sprintf("%02d" ,1:nrow(df_ints)) )
+)
+
+# Extract PCA coordinate
+pca_cor_b2 <- p_pca_bridge2[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>%
+  mutate(Batch = gsub("data1.*", "batch_1", SampleID),
+         Batch = gsub("data2.*", "batch_2", Batch),
+         SampleID = gsub("data1", "", SampleID),
+         SampleID = gsub("data2", "", SampleID)) %>% 
+  # Combine with master annotation
+  left_join(mat_sam)
+
+```
+
+```{r}
+p2.1 <- 
+  ggplot(pca_cor_b2, aes(x=PC1, y=PC2, colour=Batch)) +
+  geom_point() +
+  gghighlight(use_direct_label = FALSE) +
+  theme(legend.position = "right") +
+  facet_wrap(~Matching) +
+  theme_custom +
+  #scale_colour_manual(values=pal.study) + 
+  labs(title="Highlighting the Sequencing batch")
+p2.1
+```
+
+Plot the cohort
+
+```{r}
+ggplot(pca_cor_b2, aes(x=PC1, y=PC2, colour=colors)) +
+  geom_point(size=2.5) +
+  gghighlight(use_direct_label = FALSE) +
+  facet_wrap(~Batch) +
+  ylab(p_pca_bridge2[[1]]$labels$y) +
+  xlab(p_pca_bridge2[[1]]$labels$x) +
+  theme_custom +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_colour_manual(values=pal.cohort) +
+  NULL
+```
+
+## Final analysis
+
+Here we bridge across 3 cohorts, We simply combine the bridged NPX values. 
+
+
+```{r}
+b1 <- npx_after_br 
+b2 <- npx_br_data2 %>% filter(!Project == "data1") %>% 
+  mutate(Project = gsub("data2", "data3", Project),
+         SampleID = gsub("data2", "data3", SampleID))
+
+b1_sub <- b1 %>% select(SampleID, OlinkID, Assay, NPX)
+b2_sub <- b2 %>% select(SampleID, OlinkID, Assay, NPX)
+
+npx_all <- rbind(b1_sub, b2_sub)
+```
+
+
+# Plot expression
+
+```{r}
+# Get cohort info
+# Create a single `sample_id` and `Platform` column
+df_cleaned <- df_meta_f %>%
+  pivot_longer(
+    cols = c(sample_id_psom, sample_id_Q13356, sample_id_Q15806),
+    names_to = "Platform",
+    values_to = "sample_id"
+  ) %>%
+  filter(!is.na(sample_id)) %>%
+  mutate(
+    Platform = case_when(
+      Platform == "sample_id_psom" ~ "data3Ps",
+      Platform == "sample_id_Q13356" ~ "data1Q_13356",
+      Platform == "sample_id_Q15806" ~ "data2Q_15806"
+    )
+  )%>%
+  select(HCI_cID, cohort, txt_stat, sample_id, Platform) %>% 
+  mutate(SampleID = paste(Platform, sample_id, sep="_")) %>% 
+  select(-Platform, -sample_id)
+
+
+
+
+npx_all <- npx_all %>% left_join(df_cleaned)
+
+npx_all_sub <- npx_all %>% dplyr::filter(str_detect(SampleID, "data3"))
+```
+
+Lets plot
+
+```{r}
+
+plot_assay <- function(dat_NPX, assay_name, cohort_palette = NULL) {
+  # Filter data for the selected assay
+  df_plot <- dat_NPX %>%
+    dplyr::filter(Assay == assay_name)
+
+  # Check if data exists for the selected assay
+  if (nrow(df_plot) == 0) {
+    stop("No data available for the selected assay.")
+  }
+
+  # Define y-axis limits
+  max_y <- max(df_plot$NPX, na.rm = TRUE)
+  min_y <- min(df_plot$NPX, na.rm = TRUE)
+
+  # Create the plot
+  p <- ggplot(df_plot, aes(x = cohort, y = NPX, fill = cohort)) +
+    geom_quasirandom(dodge.width = 0.9, colour = "grey30", alpha = 0.5) +
+    geom_violin(alpha = 0.5, scale = "width", position = position_dodge(width = 0.9)) +
+    geom_boxplot(outlier.alpha = 0, width = 0.2, coef = 0,
+                 position = position_dodge(width = 0.9)) +
+    theme_bw() +
+    labs(title = paste("Assay:", assay_name), x = "Cohort", y = "NPX") +
+    theme(
+      legend.position = "none",
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(angle = 0)
+    ) +
+    scale_y_continuous(limits = c(min_y, max_y + 3))
+
+  # Add significance tests if there are multiple cohorts
+  cohort_levels <- unique(df_plot$cohort)
+  if (length(cohort_levels) > 1) {
+    comparisons <- combn(cohort_levels, 2, simplify = FALSE)
+    p <- p + geom_signif(
+      comparisons = comparisons,
+      map_signif_level = FALSE,
+      test = "t.test",
+      y_position = seq(max_y, max_y + length(comparisons), by = 1)
+    )
+  }
+
+  # Apply custom cohort colors if provided
+  if (!is.null(cohort_palette)) {
+    p <- p + scale_fill_manual(values = cohort_palette)
+  }
+
+  return(p)
+}
+```
+
+
+Lets get the HR value associated with survival for these proeints 
+
+
+```{r}
+m1 <- meta_psom %>% mutate(sample_id = paste0("data3Ps_", sample_id))
+m2 <- meta_q1335 %>% mutate(sample_id = paste0("data1Q_13356_", sample_id))
+m3 <- meta_q1580 %>% mutate(sample_id = paste0("data2Q_15806_", sample_id))
+
+meta_bridge <- rbind(m1, m2, m3)
+
+# Fix the PSA to numeric
+meta_bridge <- meta_bridge %>% 
+  mutate(psa = gsub("<", "", psa),
+         psa = as.numeric(psa),
+         ldh = as.numeric(ldh),
+         alk_ph = as.numeric(alk_ph))
+
+# Important to remove duplicated samples (bridging sample), retaining only 1
+# > TO DO - WHICH BRDGING TO REMOCVE
+# meta_bridge2<- meta_bridge %>% 
+#   filter(!sample_id %in% dat_sub$sample_id_psom)
+
+
+# Add cohort info 
+tmp_npx <- npx_all %>% 
+  rename(sample_id = SampleID) %>% 
+  select(sample_id, cohort) %>% distinct()
+
+meta_bridge2 <- meta_bridge %>% left_join(tmp_npx) %>% 
+  filter(cohort == "C_D")
+```
+
+Lets run HR analysis for the protein
+
+```{r}
+# Extract the NPX value of a gene defining C & D group
+eg_protein <- "ANGPT2"
+# Binarize protein to low or high based on median
+npx_exp <- npx_all %>% dplyr::filter(Assay %in% eg_protein) %>% 
+  rename(sample_id = SampleID) %>% 
+  select(sample_id, NPX) %>% 
+  mutate(sample_id = as.character(sample_id),
+         npx_median = median(NPX),
+         npx_bin = case_when(NPX >= npx_median ~ "high",
+                             NPX < npx_median ~ "low"),
+         npx_bin = factor(npx_bin, levels = c("low", "high")))
+# Combine with metadata 
+tmp_df <- meta_bridge %>% left_join(npx_exp)
+
+
+# Fit one protein using basic function
+model3 <- coxph(Surv(OS, death) ~ npx_bin, data = tmp_df)
+```
+
+
+Now make it into a function
+
+```{r}
+plot_assay_with_cox <- function(dat_NPX, meta_bridge, assay_name, cohort_palette = NULL) {
+  # Filter data for the selected assay
+  df_plot <- dat_NPX %>%
+    filter(Assay == assay_name) %>%
+    rename(sample_id = SampleID) %>%
+    select(sample_id, NPX, OlinkID, cohort)
+  
+  # Check if data exists
+  if (nrow(df_plot) == 0) {
+    stop("No data available for the selected assay.")
+  }
+  
+  # Binarize NPX values (low/high based on median) per OlinkID
+  df_plot <- df_plot %>%
+    group_by(OlinkID) %>%
+    mutate(
+      npx_median = median(NPX, na.rm = TRUE),
+      npx_bin = case_when(NPX >= npx_median ~ "high", NPX < npx_median ~ "low"),
+      npx_bin = factor(npx_bin, levels = c("low", "high"))
+    ) %>%
+    ungroup()
+  
+  # Merge with metadata
+  tmp_df <- meta_bridge %>% left_join(df_plot, by = "sample_id")
+  
+  # Fit Cox model per OlinkID and extract HR, CI, and p-value for each OlinkID
+  cox_results <- tmp_df %>%
+    group_by(OlinkID) %>%
+    summarize(
+      HR = tryCatch({
+        cox_model <- coxph(Surv(OS, death) ~ npx_bin, data = cur_data())
+        cox_summary <- summary(cox_model)
+        HR <- round(cox_summary$coefficients[1, "exp(coef)"], 2)
+        CI_lower <- round(cox_summary$conf.int[1, "lower .95"], 2)
+        CI_upper <- round(cox_summary$conf.int[1, "upper .95"], 2)
+        p_value <- signif(cox_summary$coefficients[1, "Pr(>|z|)"], 3)
+        paste0("HR: ", HR, " (95% CI: ", CI_lower, "-", CI_upper, "), p = ", p_value)
+      }, error = function(e) "Cox model failed")
+    ) %>%
+    ungroup()
+  
+  # Join Cox results to df_plot
+  df_plot <- df_plot %>% left_join(cox_results, by = "OlinkID")
+  
+  # Create new column OlinkID_HR for facet label
+  df_plot <- df_plot %>%
+    mutate(OlinkID_HR = paste(OlinkID, "\n", HR))
+  
+  # Define y-axis limits
+  max_y <- max(df_plot$NPX, na.rm = TRUE)
+  min_y <- min(df_plot$NPX, na.rm = TRUE)
+  
+  # Define cohort comparisons for significance testing
+  comparisons <- list(c("Local", "mHSPC"), c("mHSPC", "mCRPC"), c("Local", "mCRPC"))
+  
+  # Create the plot with faceting by OlinkID_HR
+  p <- ggplot(df_plot, aes(x = cohort, y = NPX, fill = cohort)) +
+    geom_quasirandom(dodge.width = 0.9, colour = "grey30", alpha = 0.5) +
+    geom_violin(alpha = 0.5, scale = "width", position = position_dodge(width = 0.9)) +
+    geom_boxplot(outlier.alpha = 0, width = 0.2, coef = 0,
+                 position = position_dodge(width = 0.9)) +
+    stat_summary(geom = "text", fun = median, aes(label = sprintf("%.2f", ..y..)), 
+                 position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +  # Add median values
+    geom_signif(
+      comparisons = comparisons,
+      map_signif_level = FALSE,
+      test = "t.test",
+      y_position = c(max_y, max_y + 1, max_y + 2)
+    ) +
+    theme_bw() +
+    labs(title = paste0(assay_name, " Expression by Cohort"), x = "Cohort", y = "NPX") +
+    facet_wrap(~OlinkID_HR, ncol = 2, scales = "free_y") +  # Facet by OlinkID_HR
+    theme(
+      legend.position = "none",
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(angle = 0)
+    ) +
+    scale_y_continuous(limits = c(min_y, max_y + 3))
+  
+  # Apply custom cohort colors if provided
+  if (!is.null(cohort_palette)) {
+    p <- p + scale_fill_manual(values = cohort_palette)
+  }
+  
+  return(p)
+}
+```
+
+
+Plot these
+
+```{r}
+# Define a list of proteins
+protein_list <- c("DKK1", "BSG", "FGF19", "IGFBP2", "MIF", "PTX3", "IL1RL1",
+                  "TFRC", "PLAUR", "VEGFC", "VEGFB", "VEGFD", "VEGFA", "NRP2", "IL6")
+
+protein_list <- c("SEMA6C", "EXOSC10", "NDRG1", "NCAM1", "TGFB1", "CNTN1", "ROBO2", "IGBP1", "CCN2")
+
+
+# Define the dataset
+dat_rename <- npx_all %>%
+  mutate(cohort = case_when(
+    cohort == "A" ~ "Local",
+    cohort == "B" ~ "mHSPC",
+    cohort == "C_D" ~ "mCRPC",
+    TRUE ~ cohort  # Keeps any other values unchanged
+  ))
+
+dat_in <- dat_rename
+meta_in <- meta_bridge2
+
+
+# Define output PDF file
+pdf(file.path(wd$outCurr, "Protein_Plots_all_Samples.pdf"), width = 10, height = 7) 
+
+# Loop through each protein and plot
+for (protein in protein_list) {
+  p <- plot_assay_with_cox(dat_in, meta_in, protein, cohort_palette=c("#4e79a7", "#f28e2b", "#59a14f")) 
+  print(p)  # This ensures the plot gets added to the PDF
+}
+
+# Close the PDF device
+dev.off()
+
+
+# For only pre-treatment ---------------------- #
+dat_in <- dat_rename %>% 
+  dplyr::filter(txt_stat == "Pre")
+
+
+
+# Define output PDF file
+pdf(file.path(wd$outCurr, "Protein_Plots_Pre_txt.pdf"), width = 10, height = 7) 
+
+# Loop through each protein and plot
+for (protein in protein_list) {
+  p <- plot_assay_with_cox(dat_in, meta_in, protein, cohort_palette=c("#1f77b4", "#ff7f0e", "#2ca02c")) 
+  print(p)  # This ensures the plot gets added to the PDF
+}
+
+# Close the PDF device
+dev.off()
+
+
+
+# For only POST-treatment ---------------------- #
+dat_in <- dat_rename %>% 
+  dplyr::filter(txt_stat == "Post")
+
+
+
+# Define output PDF file
+pdf(file.path(wd$outCurr, "Protein_Plots_Post_txt.pdf"), width = 10, height = 7) 
+
+# Loop through each protein and plot
+for (protein in protein_list) {
+  p <- plot_assay_with_cox(dat_in, meta_in, protein, cohort_palette=c("#aec7e8", "#ffbb78", "#98df8a")) 
+  print(p)  # This ensures the plot gets added to the PDF
+}
+
+# Close the PDF device
+dev.off()
+```
+

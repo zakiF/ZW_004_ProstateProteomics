@@ -1,0 +1,1105 @@
+---
+title: "Initial analysis"
+date: "2023-04-12"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+# Background
+
+[Manish Kohli](https://healthcare.utah.edu/fad/mddetail.php?physicianID=u6029853) generated data from Olink assay of Prostate cancer patients. We aim to analyse the data to answer the folowing questions. 
+
+
+# Objectives
+
+1. Visualize a summary of the clinical data
+  * Sankey plot / Waffle plot
+2. Protein expression repertoire across different stages of progression
+  
+
+# Pre-processing 
+
+## Loading packages
+
+```{r, message=FALSE, warning=FALSE}
+library(devtools)
+library(here)
+library(tidyverse)
+library(readxl)   
+library(OlinkAnalyze) # install.packages("OlinkAnalyze")
+library(stringr)
+# Plotting  
+library(ggbeeswarm)
+library(ggsankey)
+library(pheatmap)
+library(ggsignif)
+library(UpSetR)
+library(RColorBrewer)
+
+
+library(venn) # install.packages("venn")
+library(paletteer)
+library(UpSetR)
+
+library(htmlwidgets)
+library(networkD3)
+library(webshot)
+```
+
+
+## Directories
+
+```{r}
+wd <- list()
+wd$main <- here()
+wd$data <- file.path(wd$main, "data")
+wd$manishData <- file.path(wd$data, "raw/data_fromManish")
+wd$output <- file.path(wd$main, "output")
+wd$script <- file.path(wd$main, "scripts")
+
+wd$outData <- file.path(wd$output, "data")
+wd$outCurr <- file.path(wd$output, "01_InitialAnalys")
+
+t.testDir <- file.path(wd$outCurr , "t_test")
+dir.create(t.testDir)
+```
+
+
+Create directories
+
+```{r}
+if (!file.exists(wd$outCurr)) {
+  dir.create(wd$outCurr)
+} else {
+  print("Directory already exists")
+}
+```
+
+Load functions
+
+```{r}
+source(file.path(wd$script, "functions.R"))
+```
+
+
+Set up colours
+
+```{r}
+pal.cohort_main <- c("#F8766D", "#7CAE00", "#00BFC4", "#C77CFF")
+
+pal.cohort_main <- c(turqoise, red, darkblue, yellow)
+
+```
+
+
+## Load data
+
+Load the processed metadata file
+
+```{r}
+df_meta <- read.csv(file.path(wd$outData, "metadata.csv"))
+```
+
+Read the NPX data 
+
+**E3072_AN00003660_AN00003661_NPX_2022-04-21-columns**
+
+This file is the NPX values from Olink. Samples are listed in the `SampleID` column
+
+```{r}
+# Read the files
+dat_NPX <- readxl::read_excel(file.path(wd$manishData, "E3072_AN00003660_AN00003661_NPX_2022-04-21-columns.xlsx"))
+```
+
+We only want to analyse the samples where we have the metadata captured. So we exclude some NPX data. Check if the number of samples assayed by Olink is the same in the meatadata. 
+
+```{r}
+length(unique(df_meta$sample_id))
+length(unique(dat_NPX$SampleID))
+```
+
+There are 178 samples assayed by Olink, but we have 168 samples in our annotated clinical data less samples. This was due to the filtering steps we did.
+
+> Check with Manish what to do about the 10 samples
+
+For now we filter the NPX data to only include the samples where we have clinical data
+
+```{r}
+```
+
+
+# Objective 1
+
+**Visualize a summary of the clinical data**
+
+
+
+## Sankey summary 
+
+
+We extract the information we would like to viz in Sankey plot. Each column is an item we want to display. Start with 3 simple columns
+
+
+```{r}
+# 3 level sankey
+new_df <- data.frame(
+  pt_id = df_meta$pt_idx,
+  cohort = df_meta$cohort2,
+  glsn = df_meta$diag_glsn_sum_c,
+  tx = df_meta$serial_sample)
+
+# Group into local or metastatic
+new_df <- new_df %>%
+  mutate(
+    cohort_main = 
+      case_when(cohort == "A"~ "Local",
+                cohort %in% c("B", "C", "D") ~ "Mets"))
+
+
+```
+
+There will be duplicated patient because some patients were collected prior and after treatment. We want the Sankey to reflect the number patient number rather than the number of samples.  
+
+```{r}
+t1 <- new_df %>% dplyr::filter(tx == 1)
+t2 <- new_df %>% dplyr::filter(tx == 2) %>% select(pt_id, tx) %>% rename(tx2 = tx)
+
+df_san <- t1 %>% left_join(t2)
+
+# See how it looks
+df_san2 <- make_long(df_san, cohort_main, cohort, glsn, tx, tx2) 
+
+
+ggplot(df_san2, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = factor(node),
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size = 3.5, color = 1, fill = "white") +
+  NULL
+```
+
+
+Try to make it a bit nicer
+
+```{r}
+# Expand to more than two columns
+eg_link_1 <- df_san %>% select(cohort_main, glsn) %>%
+  filter(cohort_main == "Local") %>%
+  group_by(cohort_main, glsn) %>%
+  summarise(num = n()) %>%
+  as.data.frame()
+colnames(eg_link_1) <- c("source", "target", "value")
+
+eg_link_2 <- df_san %>% select(cohort_main, cohort) %>%
+  filter(cohort_main == "Mets") %>%
+  mutate(cohort = case_when(cohort %in% c("C","D") ~ "mCRPC",
+                            cohort %in% c("B") ~ "mHSPC")) %>%
+  group_by(cohort_main, cohort) %>%
+  summarise(num = n()) %>%
+  as.data.frame()
+colnames(eg_link_2) <- c("source", "target", "value")
+
+eg_link_3 <- df_san %>% 
+  filter(cohort_main == "Mets") %>%
+  filter(cohort %in% c("B")) %>%
+    mutate(cohort = case_when(cohort %in% c("C","D") ~ "mCRPC",
+                            cohort %in% c("B") ~ "mHSPC")) %>%
+  mutate(tx = paste(cohort, tx, sep="_")) %>%
+  select(cohort, tx) %>%
+  group_by(cohort, tx) %>%
+  summarise(num = n()) %>%
+  as.data.frame()
+colnames(eg_link_3) <- c("source", "target", "value")
+
+eg_link_4 <- df_san %>% 
+  filter(cohort_main == "Mets") %>%
+  filter(cohort %in% c("C", "D")) %>%
+  mutate(cohort2 = cohort) %>%
+  mutate(cohort2 = case_when(cohort2 %in% c("C") ~ "Biochemical",
+                            cohort2 %in% c("D") ~ "Clinical")) %>%
+  select(cohort, cohort2) %>%
+  mutate(cohort = case_when(cohort %in% c("C","D") ~ "mCRPC",
+                            cohort %in% c("B") ~ "mHSPC")) %>%
+  group_by(cohort, cohort2) %>%
+  summarise(num = n()) %>%
+  as.data.frame()
+colnames(eg_link_4) <- c("source", "target", "value")
+
+eg_link_5 <- df_san %>% 
+  filter(cohort_main == "Mets") %>%
+  filter(cohort %in% c("B")) %>%
+    mutate(cohort = case_when(cohort %in% c("C","D") ~ "mCRPC",
+                            cohort %in% c("B") ~ "mHSPC")) %>%
+  mutate(tx = paste(cohort, tx, sep="_"),
+         tx2 = paste(cohort, tx2, sep="_")) %>%
+  select(tx, tx2) %>%
+  group_by(tx, tx2) %>%
+  summarise(num = n()) %>%
+  as.data.frame()
+colnames(eg_link_5) <- c("source", "target", "value")
+
+eg_link_6 <- df_san %>% 
+  filter(cohort_main == "Mets") %>%
+  filter(cohort %in% c("D")) %>%
+    mutate(cohort = case_when(cohort %in% c("C","D") ~ "mCRPC",
+                            cohort %in% c("B") ~ "mHSPC")) %>%
+  mutate(tx = paste(cohort, tx, sep="_"),
+         tx2 = paste(cohort, tx2, sep="_")) %>%
+  select(tx, tx2) %>%
+  group_by(tx, tx2) %>%
+  summarise(num = n()) %>%
+  as.data.frame()
+colnames(eg_link_5) <- c("source", "target", "value")
+
+eg_link <- rbind(eg_link_1, eg_link_2, eg_link_3, eg_link_4, eg_link_5)
+
+
+# Make the nodes
+eg_node <- data.frame(
+  name = c(eg_link$source, eg_link$target)) %>%
+  distinct() %>%
+  mutate(row = row_number(),
+         row = row - 1)
+
+# Use match() to replace the values in eg_link with the values in eg_node
+eg_link$source <- eg_node$row[match(eg_link$source, eg_node$name)]
+eg_link$target <- eg_node$row[match(eg_link$target, eg_node$name)]
+
+p <- 
+sankeyNetwork(Links = eg_link, Nodes = eg_node, Source = "source", 
+              Target = "target", Value = "value", NodeID = "name",
+              sinksRight = FALSE)
+p
+
+#library(htmlwidgets)
+saveWidget(p, file="tmp.html")
+
+#library(webshot)
+webshot(url="tmp.html", file="tmp.pdf")
+
+```
+
+
+
+# Objective 2
+
+**Protein expression repertoire across different stages of progression**
+
+
+We merge the master annotation with the NPX values
+
+```{r}
+df_meta2 <- df_meta %>%
+  mutate(sample_id = as.character(sample_id)) %>%
+  rename(SampleID = sample_id)
+
+dat_NPX_anno <- dat_NPX %>%
+  dplyr::filter(SampleID %in% df_meta2$SampleID) %>%
+  dplyr::left_join(df_meta2)
+```
+
+
+## Global overview
+
+Run PCA
+
+```{r}
+p_pca <-
+  dat_NPX_anno %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort2", byPanel = FALSE, quiet = FALSE) 
+```
+
+Get PC3 coordinates
+
+
+```{r}
+p_pca2 <-
+  dat_NPX_anno %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort2", byPanel = FALSE, quiet = FALSE,
+                 y_val=3) 
+```
+
+For future plotting of the PCA we can extract the PCA coordinates
+
+```{r}
+pca_cor2 <- p_pca2[[1]]$data 
+
+pca_cor <- p_pca[[1]]$data %>%
+  rename(PC1 = PCX,
+         PC2 = PCY) %>%
+  mutate(PC3 = pca_cor2$PCY) %>%
+  rownames_to_column(var = "SampleID") %>%
+  # Combine with master annotation
+  left_join(df_meta2)
+
+```
+
+Replot with better colour scale 
+
+```{r,eval=TRUE}
+p1 <- 
+  ggplot(pca_cor, aes(x=PC1, y=PC2, colour=cohort2)) +
+  geom_point(size=2.5) +
+  ylab(p_pca[[1]]$labels$y) +
+  xlab(p_pca[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_color_manual(values=pal.cohort_main) +
+  NULL
+p1
+```
+
+
+
+
+Now lets plot the mrn number of these outliers and colour by their biobank_time 
+
+
+```{r}
+# Identify outlier
+outlier_sam <- pca_cor %>% dplyr::filter(PC2 > 0.2) %>% pull(SampleID)
+outlier_mrn <- pca_cor %>% dplyr::filter(PC2 > 0.2) %>% pull(mrn)
+
+# Save the file without outlier
+dat_NPX_anno_all <- dat_NPX_anno
+df_meta_out <- df_meta2 %>%
+  mutate(isOutlier = case_when(SampleID %in% outlier_sam ~ "yes",
+                               TRUE ~ "no"))
+
+write.csv(df_meta_out, file.path(wd$outCurr, "MasterAnnotation.csv"))
+
+# Re-extract PCA plot
+pca_cor <- p_pca[[1]]$data %>%
+  rownames_to_column(var = "SampleID") %>%
+  # Combine with master annotation
+  left_join(df_meta_out)
+
+```
+
+
+The plotting script
+
+```{r}
+pca_cor <- pca_cor %>%
+  mutate(
+         mrn = as.character(mrn),
+         mrn_lab = case_when(mrn %in% outlier_mrn ~ mrn,
+                             TRUE ~ "not_outlier"),
+         serial_sample = as.character(serial_sample),
+         mrn_lab2 = paste(mrn_lab, serial_sample, sep="_"),
+         mrn_lab2 = case_when(mrn %in% outlier_mrn ~ mrn_lab2,
+                             TRUE ~ "not_outlier"))
+
+
+p2 <-
+  ggplot(pca_cor, aes(x=PCX, y=PCY, colour=isOutlier)) +
+  geom_point(size=2.5) +
+  ylab(p_pca[[1]]$labels$y) +
+  xlab(p_pca[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_color_manual(values=c("grey50", "red")) +
+  labs(subtitle = "Outier samples coloured in red") +
+  NULL
+p2
+
+
+```
+
+
+
+## Remove outliers
+
+```{r}
+base_samp <- pca_cor %>% dplyr::filter(serial_sample== "2") %>% pull(SampleID)
+
+dat_NPX_anno2 <- dat_NPX_anno %>% 
+  dplyr::filter(!SampleID %in% c(outlier_sam, base_samp))
+```
+
+Re-do global PCA
+
+
+```{r}
+p_pca_no <-
+  dat_NPX_anno2 %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  #filter(OlinkID %in% row.names(mat22_or)) %>%
+  olink_pca_plot(df = .,
+                 color_g = "cohort2", byPanel = FALSE, quiet = FALSE) 
+
+
+p_pca_no_2 <-
+  dat_NPX_anno2 %>% 
+  filter(!str_detect(SampleID, 'CS')) %>% 
+  olink_pca_plot(df = .,
+                 color_g = "cohort2", byPanel = FALSE, quiet = FALSE,
+                 y_val=3) 
+```
+
+
+```{r}
+# Re-extract PCA plot
+pca_no_2 <- p_pca_no_2[[1]]$data 
+
+pca_cor_no <- p_pca_no[[1]]$data %>%
+    rename(PC1 = PCX,
+         PC2 = PCY) %>%
+  mutate(PC3 = pca_no_2$PCY) %>%
+  rownames_to_column(var = "SampleID") %>%
+  # Combine with master annotation
+  left_join(df_meta2)
+
+p_no <- 
+  ggplot(pca_cor_no, aes(x=PC1, y=PC2, colour=cohort2)) +
+  geom_point(size=2.5) +
+  ylab(p_pca[[1]]$labels$y) +
+  xlab(p_pca[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_color_manual(values=pal.cohort_main) +
+  NULL
+p_no
+
+p_no2 <- 
+  ggplot(pca_cor_no, aes(x=PC1, y=PC3, colour=cohort2)) +
+  geom_point(size=2.5) +
+  ylab(p_pca[[1]]$labels$y) +
+  xlab(p_pca[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_color_manual(values=pal.cohort_main) +
+  NULL
+p_no2
+
+# Colour by month to death since 
+p_no_1 <- 
+  ggplot(pca_cor_no, aes(x=PC1, y=PC2, colour=s1_to_death_or_last_fu_mo)) +
+  geom_point(size=2.5) +
+  ylab(p_pca[[1]]$labels$y) +
+  xlab(p_pca[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_color_viridis_c(direction=1, option= "D") +
+  NULL
+p_no_1
+
+
+p_no_2 <- 
+  ggplot(pca_cor_no, aes(x=PC1, y=PC3, colour=s1_to_death_or_last_fu_mo)) +
+  geom_point(size=2.5) +
+  ylab(p_pca_no_2[[1]]$labels$y) +
+  xlab(p_pca[[1]]$labels$x) +
+  theme_classic() +
+  theme(legend.position = "right",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank")) +
+  scale_color_viridis_c(direction=1, option= "D") +
+  NULL
+p_no_2
+```
+
+## Re-cluster
+
+
+> TO DO
+
+The PCA is suggesting some heterogenity in cohort D. We try to cluster cohort D into category. Generate gene x sample matrix
+
+```{r}
+# Set up the EdgeR object
+cD <- dat_NPX_anno2 %>% select(SampleID, pt_idx, cohort2) %>% na.omit() %>% distinct() 
+
+
+# Convert to wide format
+cts <- dat_NPX_anno2 %>% select(OlinkID, NPX, SampleID) %>% tidyr::pivot_wider(names_from = SampleID, values_from = NPX) %>% as.data.frame()
+row.names(cts) <- cts$OlinkID
+cts <- cts[,-1]
+colnames(cts)
+
+identical(cD$SampleID, colnames(cts))
+
+mat <- cts
+```
+
+Run clustering
+
+```{r}
+# Generate gene x sample matrix
+ss <- scale(mat)
+d=dist(t(ss))
+hc=hclust(d,method="ward.D2")
+plot(hc)
+```
+
+Make the dendogram nicer
+
+```{r}
+tree_hc <- hc
+
+# Making a prettier dendrogram.
+library(dendextend)
+tree_hc$labels <- seq_along(tree_hc$labels)
+dend <- as.dendrogram(tree.416b, hang=0.1)
+
+combined.fac <- paste0(sce.416b$block, ".", 
+    sub(" .*", "", sce.416b$phenotype))
+labels_colors(dend) <- c(
+    "20160113.wild"="blue",
+    "20160113.induced"="red",
+    "20160325.wild"="dodgerblue",
+    "20160325.induced"="salmon"
+)[combined.fac][order.dendrogram(dend)]
+
+plot(dend)
+```
+
+
+# Objective 3 
+
+**Baseline analysis**
+
+Here we analyse the samples at baseline only. Ie - we only keep serial sample 1 and exclude samples after treatment (serial sample 2)
+
+
+## Group A vs rest
+
+```{r}
+dat_NPX_anno_all <- dat_NPX_anno2 %>%
+  dplyr::mutate(
+    c_a_vs_b = case_when(cohort2 == "A" ~ "Y", cohort2 == "B" ~ "N"),
+    c_a_vs_c = case_when(cohort2 == "A" ~ "Y", cohort2 == "C" ~ "N"),
+    c_a_vs_d = case_when(cohort2 == "A" ~ "Y", cohort2 == "D" ~ "N"),
+    
+    #c_b = case_when(cohort_simple == "B" ~ "Y", TRUE ~ "N"),
+    c_b_vs_a = case_when(cohort2 == "B" ~ "Y", cohort2 == "A" ~ "N"),
+    c_b_vs_c = case_when(cohort2 == "B" ~ "Y", cohort2 == "C" ~ "N"),
+    c_b_vs_d = case_when(cohort2 == "B" ~ "Y", cohort2 == "D" ~ "N"),
+    
+    #c_c = case_when(cohort_simple == "C" ~ "Y", TRUE ~ "N"),
+    c_c_vs_a = case_when(cohort2 == "C" ~ "Y", cohort2 == "A" ~ "N"),
+    c_c_vs_b = case_when(cohort2 == "C" ~ "Y", cohort2 == "B" ~ "N"),
+    c_c_vs_d = case_when(cohort2 == "C" ~ "Y", cohort2 == "D" ~ "N"),
+    
+    #c_d = case_when(cohort_simple == "D" ~ "Y", TRUE ~ "N"),
+    c_d_vs_a = case_when(cohort2 == "D" ~ "Y", cohort2 == "A" ~ "N"),
+    c_d_vs_b = case_when(cohort2 == "D" ~ "Y", cohort2 == "B" ~ "N"),
+    c_d_vs_c = case_when(cohort2 == "D" ~ "Y", cohort2 == "C" ~ "N"),
+    
+    # Unique to metastatic
+    c_mets = case_when(cohort2 == "A" ~ "Y", TRUE ~ "N"),
+    # Unique to local
+    c_local = case_when(cohort2 == "A" ~ "N", TRUE ~ "Y")
+  )
+
+
+```
+
+
+Perform t-test. Make a function and run in loop
+
+```{r, warning=FALSE, message=FALSE}
+sel_cat <- dat_NPX_anno_all %>% dplyr::select(c_a_vs_b:c_local) %>% colnames()
+#sel_cat <- sel_cat[1:5]
+
+p_list <- list()
+
+for (i in seq_along(sel_cat)){
+  t.tes_res <- t.test_cat_col(dat_NPX_anno_all, sel_cat[i])
+  
+  p_list[[i]]  <- t.tes_res
+}
+
+p_list_base <- p_list
+
+
+```
+
+
+Get all the DE
+
+```{r}
+df_group_de <- do.call(rbind, p_list_base)
+```
+
+
+View example expression
+
+
+```{r}
+cat_int <- "c_a"
+tt <- df_group_de %>% dplyr::filter(Cat == cat_int)
+ll <- head(tt) %>% pull(OlinkID)
+
+df_plot <- dat_NPX_anno_all %>%
+  dplyr::filter(OlinkID %in% ll) 
+
+p_viol_gene <- 
+  df_plot %>%
+  ggplot(aes(x = cohort2, y = NPX, fill = cohort2)) +
+  geom_quasirandom(dodge.width=0.9, colour="grey30", alpha=0.5) +
+  geom_violin(alpha = 0.5, scale = "width", position = position_dodge(width = 0.9)) +
+  geom_boxplot(outlier.alpha = 0,  width = 0.2, coef=0,
+               position = position_dodge(width = 0.9)) +
+  #scale_fill_manual(values=unique(pal.cohort_main)) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_line(linetype = "blank"), 
+        panel.grid.minor = element_line(linetype = "blank"),
+        axis.text.x = element_text(angle = 0)) +
+  facet_wrap(~Assay, ncol=5, scales = "free_y") +
+  #scale_y_continuous(limits = c(0,12),
+  #                   breaks = c(0,5,10)) +
+  #xlab("cohort") +
+  NULL
+p_viol_gene
+```
+
+
+
+Now we find the OlinkID unique to the categories
+
+```{r}
+cut_fdr <- 0.05
+cut_lfc <- -0.5
+df_cat_a <- df_group_de %>%
+  #filter(Cat %in% c("c_b_vs_a", "c_c_vs_a", "c_d_vs_a") & Adjusted_pval <= cut_fdr)
+  filter(Cat %in% c("c_b_vs_a", "c_c_vs_a", "c_d_vs_a") & p.value <= cut_fdr & log2FC <= cut_lfc)
+
+df_cat_b <- df_group_de %>%
+  filter(Cat %in% c("c_a_vs_b", "c_c_vs_b", "c_d_vs_b") & p.value <= cut_fdr & log2FC <= cut_lfc)
+
+df_cat_c <- df_group_de %>%
+  filter(Cat %in% c("c_a_vs_c", "c_b_vs_c", "c_d_vs_c") & p.value <= cut_fdr & log2FC <= cut_lfc)
+
+df_cat_d <- df_group_de %>%
+  filter(Cat %in% c("c_a_vs_d", "c_b_vs_d", "c_c_vs_d") & p.value <= cut_fdr & log2FC <= cut_lfc)
+
+```
+
+
+## Overlap 
+
+Using these genes list, we identify genes defining each categories
+
+Make upset plot
+
+```{r}
+un_a <- unique(df_cat_a$OlinkID)
+un_b <- unique(df_cat_b$OlinkID)
+un_c <- unique(df_cat_c$OlinkID)
+un_d <- unique(df_cat_d$OlinkID)
+
+l_uniq <- unique(c(un_a, un_b, un_c, un_d))
+# example of list input (list of named vectors)
+listInput <- 
+  list(A = un_a,
+       B = un_b,
+       C = un_c,
+       D = un_d)
+
+pdf(file.path(wd$output, "Global_UpSet_sig.pdf"),width = 7, height = 5)
+upset(fromList(listInput), 
+      nsets=8,
+        keep.order = TRUE,      
+      sets = rev(c("A", "B", "C", "D")),
+      order.by = "freq")
+dev.off()
+
+
+```
+
+Or venn diagram
+
+```{r}
+l_all <- list(
+  A = un_a,
+  B = un_b,
+  C = un_c,
+  D = un_d
+)
+
+pdf(file.path(wd$output, "Global_Venn_sig.pdf"),width = 7, height = 6.5)
+venn(l_all, ilab=TRUE, zcolor = "style")
+dev.off()
+```
+
+Compile into a simplified table
+
+```{r}
+combined_o <- purrr::reduce(list(
+
+  data.frame(gene=un_a, A=1),
+  data.frame(gene=un_b, B=1),
+  data.frame(gene=un_c, C=1),
+  data.frame(gene=un_d, D=1)
+
+
+  
+  ), full_join)
+combined_o[is.na(combined_o)] <- 0
+
+combined_o <- combined_o %>%
+  dplyr::distinct(gene, .keep_all = TRUE)
+
+
+# Annotation file
+df_anno <- dat_NPX_anno_all %>%
+  dplyr::select(OlinkID, Assay, Panel) %>% distinct()
+
+
+combined_o <- combined_o %>%
+  dplyr::rename(OlinkID = gene) %>%
+  dplyr::left_join(df_anno) %>%
+  arrange(desc(A), desc(B), desc(C), desc(D))
+
+
+
+
+write.csv(combined_o, file.path(wd$output, "ProteinSignature_OlinkID.csv"))
+```
+
+
+## Heatmap
+
+Quick heatmap of the genes defining each group
+
+Convert the Olink data to a gene x cell matrix
+
+```{r}
+mat_olink <- dat_NPX_anno2 %>%
+  dplyr::select(SampleID, OlinkID, NPX) %>%
+  # Remove contraol samples
+  dplyr::filter(!str_detect(SampleID, 'CONTROL_SAMPLE')) %>% 
+  # Convert to wide
+  tidyr::pivot_wider(names_from = SampleID, values_from = NPX)
+
+# Rownames
+mat_olink <- as.data.frame(mat_olink)
+row.names(mat_olink) <- mat_olink$OlinkID
+mat_olink <- mat_olink %>%
+  dplyr::select(-OlinkID)
+mat_olink <- as.matrix(mat_olink)
+colnames(mat_olink) <- paste0("s", colnames(mat_olink))
+```
+
+
+Set the annotations for the heatmap
+
+```{r}
+mat_sub <- mat_olink[l_uniq, ]
+
+
+# ---------------------- #
+# Set up annotations
+# ---------------------- #
+
+# Create annotation df
+# df with link bewtween ptx_id and sampleID
+meta_samp_sub <- dat_NPX_anno2 %>%
+  filter(!SampleID %in% outlier_sam) %>%
+  dplyr::select(pt_idx, SampleID, serial_sample) %>%
+  distinct() %>%
+  mutate(SampleID = paste0("s", SampleID))
+
+# Remove unecessary columns
+kk <- dat_NPX_anno2 %>%
+  dplyr::select(pt_idx, cohort2, chaarted_volume, s1_to_death_or_last_fu_mo) %>%
+  dplyr::distinct(.keep_all = TRUE) %>%
+  # Join with the linking ID
+  dplyr::left_join(meta_samp_sub)
+  
+
+# Columns we want to show on heatmap
+mypalette_d1 <- paletteer::paletteer_c('viridis::viridis', max(kk$s1_to_death_or_last_fu_mo))
+#mypalette_d2 <- paletteer::paletteer_c('viridis::inferno', max(summary(kk$date_diff)[6]))
+  ann_col <- data.frame(Cell = kk$SampleID,
+                        cohort = kk$cohort2,
+                        #mets = kk$chaarted_volume,
+                        s1_to_death_or_last_fu = kk$s1_to_death_or_last_fu_mo
+                        #s1_to_death = kk$date_diff
+                        #serial_sample = as.character(kk$serial_sample))
+                        )
+  ann_col2 <- ann_col
+  row.names(ann_col) <- ann_col$Cell
+  ## Colours
+  # Remove the cell column
+  ann_col <- dplyr::select(ann_col, !Cell) # Remove cell column
+  # Specify the colours for the population
+  ann_list <- list(
+  #  cohort = c("A" = "#F8766D",
+  #             "B" = "#7CAE00",
+  #             "C" = "#00BFC4",
+  #             "D" = "#C77CFF"))
+      cohort = c("A" = pal.cohort_main[1],
+               "B" = pal.cohort_main[2],
+               "C" = pal.cohort_main[3],
+               "D" = pal.cohort_main[4]),
+      mets = c("High" = "black",
+               "Low" = "grey50",
+               "N/A"= "white"),
+      s1_to_death_or_last_fu = mypalette_d1)
+      #s1_to_death = mypalette_d2)
+  #)
+
+
+ 
+# ----------------- #
+# Scaling values
+# ----------------- #
+
+# Scale heatmap
+  pheatmap.scale <- function(x) {
+    m = apply(x, 1, mean, na.rm = T)
+    s = apply(x, 1, sd, na.rm = T)
+    return((x - m) / s)
+  }
+  
+mat22 <- pheatmap.scale(mat_sub)
+
+# Colour shceme
+paletteLength <- 30
+mypalette1 <- rev(paletteer::paletteer_c('ggthemes::Red-Blue Diverging', paletteLength))
+myColor <- mypalette1
+
+myBreaks <- c(seq(-2, 0, 
+                      length.out=ceiling(paletteLength/2) + 1), 
+                  seq(2/paletteLength, 
+                      2, length.out=floor(paletteLength/2)))
+  
+p_heat <- 
+    pheatmap(mat22, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE)
+```
+
+Nicer version of the heatmap, where we order the samples and rows
+
+
+```{r}
+sample_a <- kk %>% filter(cohort2 == "A")
+mat_tmp <-  mat22[,sample_a$SampleID]
+
+p_heat <- 
+    pheatmap(mat_tmp, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE,
+             silent = TRUE)
+a_or <- sample_a$SampleID[p_heat$tree_col$order]
+
+sample_b <- kk %>% filter(cohort2 == "B")
+mat_tmp <-  mat22[,sample_b$SampleID]
+
+p_heat <- 
+    pheatmap(mat_tmp, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE,
+             silent = TRUE)
+b_or <- sample_b$SampleID[p_heat$tree_col$order]
+
+sample_c <- kk %>% filter(cohort2 == "C")
+mat_tmp <-  mat22[,sample_c$SampleID]
+
+p_heat <- 
+    pheatmap(mat_tmp, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE,
+             silent = TRUE)
+c_or <- sample_c$SampleID[p_heat$tree_col$order]
+
+
+sample_d <- kk %>% filter(cohort2 == "D")
+mat_tmp <-  mat22[,sample_d$SampleID]
+
+p_heat <- 
+    pheatmap(mat_tmp, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             clustering_distance_cols = "manhattan",
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE,
+             silent = TRUE)
+d_or <- sample_d$SampleID[p_heat$tree_col$order]
+```
+
+Now we have the column order that we want, we get the rows
+
+
+```{r}
+row_1 <- combined_o %>% filter(A == 1 & B == 0 & C == 0 & D == 0) %>% pull(OlinkID)
+row_2 <- combined_o %>% filter(A == 0 & B == 1 & C == 0 & D == 0) %>% pull(OlinkID)
+row_3 <- combined_o %>% filter(A == 0 & B == 0 & C == 1 & D == 0) %>% pull(OlinkID)
+row_4 <- combined_o %>% filter(A == 0 & B == 0 & C == 0 & D == 1) %>% pull(OlinkID)
+
+u_row <- c(row_1, row_2, row_3, row_4)
+non_u_row <- combined_o %>% filter(!OlinkID %in% u_row) %>% pull(OlinkID)
+# Seperately cluster the rows not in the above
+mat_tmp <- mat22[non_u_row,]
+p_heat <- 
+    pheatmap(mat_tmp, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = TRUE, 
+             cluster_cols = TRUE,
+             clustering_distance_cols = "manhattan",
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             # gaps_col = l_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE,
+             silent = TRUE)
+
+non_u_or <- row.names(mat_tmp)[p_heat$tree_row$order]
+```
+
+Lets re-arrange the columns and rows
+
+```{r}
+# Re arrange
+#kk_or <- kk %>% dplyr::arrange(cohort_simple, desc(glsn_bin))
+kk_or <- kk %>% dplyr::arrange(cohort2, desc(s1_to_death_or_last_fu_mo), chaarted_volume)
+row_or <- c(u_row, non_u_row)
+
+mat22_or <- mat22[row_or,c(a_or, b_or, c_or, d_or)]
+mat22_or <- mat22[row_or,kk_or$SampleID]
+
+l_clust <- cumsum(c(length(a_or), length(b_or), length(c_or), length(d_or)))
+r_clust <- cumsum(c(length(row_1), length(row_2), length(row_3), length(row_4)))
+
+p_heat <- 
+    pheatmap(mat22_or, # exp_mat2 (non scaled) or mat22 if scaled
+             cluster_rows = FALSE, 
+             cluster_cols = FALSE,
+             scale = "none", # Change to none if we scaled the data
+             col=myColor,
+             breaks=myBreaks,
+             annotation_col = ann_col,
+             annotation_colors = ann_list,
+             gaps_col = l_clust,
+             gaps_row = r_clust,
+             show_colnames =F,
+             show_rownames = F,
+             #fontsize_row = 3,
+             annotation_legend = TRUE,
+             silent = TRUE)
+
+pdf(file.path(wd$output, "Global_heatmap_v2.pdf"), width = 12, height = 7)
+p_heat
+dev.off()
+
+
+```
+
+
+Box plot of the mean NPX expression per group
+
+
+```{r}
+m <- as.data.frame(mat22)
+m$OlinkID <- row.names(m)
+
+df_tmp_an <- ann_col %>%
+  tibble::rownames_to_column(var = "variable") %>%
+  dplyr::select(variable, cohort) %>% distinct()
+m <- reshape2::melt(m) %>% 
+  left_join(df_tmp_an)
+  
+```
+
+Now plot
+
+```{r}
+m2 <- m %>% 
+  mutate(gene_sig = case_when(OlinkID %in% un_a ~ "sig_A",
+                              OlinkID %in% un_b ~ "sig_B",
+                              OlinkID %in% un_c ~ "sig_C",
+                              OlinkID %in% un_d ~ "sig_D"))
+
+ggplot(m2, aes(x=cohort, y=value, fill=cohort)) +
+  geom_boxplot() +
+  facet_wrap(~gene_sig) +
+  NULL
+```
+
+
+
+
+# References
+
+NetworkD3[https://christophergandrud.github.io/networkD3/]
+Alluvial[https://corybrunson.github.io/ggalluvial/articles/ggalluvial.html]
+
