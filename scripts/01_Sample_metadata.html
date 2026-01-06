@@ -1510,17 +1510,13 @@ border-radius: 0px;
 
 <div id="background" class="section level1">
 <h1>Background</h1>
-<p>We have cohort of samples profiled for proteomics, genomics and
-metylation. We want to create a harmonized clinical file for all these
-patients.</p>
+<p>We have cohort of samples profiled for proteomics.</p>
 <p>In regards to proteomics. Samples were profiled ;</p>
 <ol style="list-style-type: decimal">
 <li>Psomagen cohort</li>
 <li>Olink 2023 cohort (Q-13356) - Also called Project 2</li>
 <li>Olink 2024 cohort (Q-15806) - Also called Project 4</li>
 </ol>
-<p>In addition, some patients were also profiled by genomics (KLK2 SNPs)
-and methylation.</p>
 </div>
 <div id="objectives" class="section level1">
 <h1>Objectives</h1>
@@ -1769,11 +1765,57 @@ cohort C.</p>
 <pre class="r"><code>dd &lt;- df_clin
 df_a &lt;- data.frame(
   mrn = dd$`MRN (UUHSC)`,
+  age = dd$Age_at_time_of_enrollment,
   HCI_cID = c(dd$Sample1_HCI_Num, dd$Sample2_HCI_Num),
   date = c(dd$Sample1_date, dd$`Sample 2 Start date`)
   ) %&gt;% filter(!is.na(HCI_cID)) %&gt;% 
   mutate(cohort = &quot;A&quot;) %&gt;% 
-  filter(HCI_cID %in% df_hci_id$HCI_cID)</code></pre>
+  filter(HCI_cID %in% df_hci_id$HCI_cID)
+
+
+df_a2 &lt;- data.frame(
+    mrn = dd$`MRN (UUHSC)`,
+    age = dd$Age_at_time_of_enrollment,
+    HCI_cID = c(dd$Sample1_HCI_Num, dd$Sample2_HCI_Num),
+    date = c(dd$Sample1_date, dd$`Sample 2 Start date`),
+    psa = c(dd$sample1_psa, dd$sample2_psa),
+    alk_phos = c(dd$sample1_alk_phos, dd$sample2_alk_phos),
+    testo = NA,  # No testosterone data for Cohort A
+    hemoGlo = c(dd$`Hemoglobin at s1`, rep(NA, length(dd$Sample1_HCI_Num))),  # Only sample 1 has hemoglobin data
+    surgery_type = dd$Surgery_Type,
+    surgery_date = dd$Surgery_date,
+    radiation_type = dd$Radiation_Type,
+    radiation_date = dd$Radiation_date,
+    glsn_diag = dd$diag_glsn,
+    death_status = dd$`Deceased?`)  %&gt;%
+  filter(!is.na(HCI_cID)) %&gt;%
+  mutate(cohort = &quot;A&quot;) %&gt;%
+  mutate(
+    psa = as.numeric(gsub(&quot;&lt;&quot;, &quot;&quot;, psa)),
+    testo = as.numeric(gsub(&quot;&lt;&quot;, &quot;&quot;, testo))
+  ) %&gt;%
+  filter(HCI_cID %in% df_hci_id$HCI_cID) %&gt;% 
+  # Convert dates to Date type
+  mutate(
+    date = as.Date(date),
+    surgery_date = as.Date(surgery_date),
+    radiation_date = as.Date(radiation_date),
+    # Calculate days from treatment to sample (positive if treatment was before sample)
+    days_since_surgery = abs(as.numeric(difftime(date, surgery_date, units = &quot;days&quot;))),
+    days_since_radiation = abs(as.numeric(difftime(date, radiation_date, units = &quot;days&quot;))),
+    # Create sur_or_rad column: pick treatment that happened before sample and is closest to sample date
+    sur_or_rad = case_when(
+    # Both treatments happened before sample - pick the closer one (smaller time difference)
+    !is.na(days_since_surgery) &amp; days_since_surgery &gt; 0 &amp;
+    !is.na(days_since_radiation) &amp; days_since_radiation &gt; 0 ~
+    ifelse(days_since_surgery &lt; days_since_radiation, surgery_type, radiation_type),
+    # Only surgery happened before sample
+    !is.na(days_since_surgery) &amp; days_since_surgery &gt; 0 ~ surgery_type,
+    # Only radiation happened before sample
+    !is.na(days_since_radiation) &amp; days_since_radiation &gt; 0 ~ radiation_type,
+    # No treatment before sample
+    TRUE ~ NA_character_)
+    ) </code></pre>
 </div>
 <div id="cohort-b" class="section level3">
 <h3>Cohort B</h3>
@@ -1787,16 +1829,27 @@ to add the treatment date.</p>
 ## • `` -&gt; `...65`</code></pre>
 <pre class="r"><code>dd &lt;- df_clin
 
+HCI_cID = c(dd$Sample1_HCI_Num, dd$Sample2_HCI_Num, dd$Sample3_HCI_Num)
+
+
 df_b &lt;- data.frame(
   mrn = dd$`MRN (UUHSC)`,
+  age = dd$Age_at_time_of_enrollment,
   HCI_cID = c(dd$Sample1_HCI_Num, dd$Sample2_HCI_Num, dd$Sample3_HCI_Num),
   date = c(dd$Sample1_date, dd$`Sample 2 Start date`, dd$`sample3 date`),
   psa = c(dd$sample1_psa, dd$sample2_psa, dd$sample3_psa),
-  testo = c(dd$sample1_testos, dd$`Sample 2 Testerone`, dd$`Sample 3 Testosterone`), 
+  testo = c(dd$sample1_testos, dd$`Sample 2 Testerone`, dd$`Sample 3 Testosterone`),
+  hemoGlo = c(dd$`Hemoglobin at s1`, rep(NA, (length(HCI_cID) - length(dd$`Hemoglobin at s1`)  ) )),
+  surgery_type = dd$Surgery_Type,
+  surgery_date = dd$Surgery_date,
+  radiation_type = dd$Radiation_Type,
+  radiation_date = dd$Radiation_date,
+  glsn_diag = dd$diag_glsn,
+  mets_stage = dd$`De Novo Mets`,
+  mets_volume = dd$chaarted_volume_at_mhspc,
   txt_ori = dd$txt_stat,
   death_date = c(dd$`Death date`),
   death_status = dd$`Deceased?`,
-  mets_volume = dd$chaarted_volume_at_mhspc,
   # Info on HSPC treatment
   txt_nhspc_1st_type = dd$`1st_nmhspc_rx`,
   txt_nhspc_1st_date = dd$`1st_nmhspc_rx_date`,
@@ -1810,14 +1863,35 @@ df_b &lt;- data.frame(
   txt_nmcrpc_1st_date = dd$`1st_nmcrpc_rx_date`,
   txt_mcrpc_1st_date = dd$`1st_mcrpc_rx_date`,
   txt_mcrpc_2nd_date = dd$`2nd_mcrpc_rx_date`
-) %&gt;% 
-  filter(!is.na(HCI_cID)) %&gt;% 
+) %&gt;%
+  filter(!is.na(HCI_cID)) %&gt;%
   mutate(
     cohort = &quot;B&quot;,
     psa = as.numeric(gsub(&quot;&lt;&quot;, &quot;&quot;, psa)),
     testo = as.numeric(gsub(&quot;&lt;&quot;, &quot;&quot;, testo))
-  ) %&gt;% 
-  filter(HCI_cID %in% df_hci_id$HCI_cID)</code></pre>
+  ) %&gt;%
+  filter(HCI_cID %in% df_hci_id$HCI_cID) %&gt;% 
+    # Convert dates to Date type
+  mutate(
+    date = as.Date(date),
+    surgery_date = as.Date(surgery_date),
+    radiation_date = as.Date(radiation_date),
+    # Calculate days from treatment to sample (positive if treatment was before sample)
+    days_since_surgery = abs(as.numeric(difftime(date, surgery_date, units = &quot;days&quot;))),
+    days_since_radiation = abs(as.numeric(difftime(date, radiation_date, units = &quot;days&quot;))),
+    # Create sur_or_rad column: pick treatment that happened before sample and is closest to sample date
+    sur_or_rad = case_when(
+    # Both treatments happened before sample - pick the closer one (smaller time difference)
+    !is.na(days_since_surgery) &amp; days_since_surgery &gt; 0 &amp;
+    !is.na(days_since_radiation) &amp; days_since_radiation &gt; 0 ~
+    ifelse(days_since_surgery &lt; days_since_radiation, surgery_type, radiation_type),
+    # Only surgery happened before sample
+    !is.na(days_since_surgery) &amp; days_since_surgery &gt; 0 ~ surgery_type,
+    # Only radiation happened before sample
+    !is.na(days_since_radiation) &amp; days_since_radiation &gt; 0 ~ radiation_type,
+    # No treatment before sample
+    TRUE ~ NA_character_)
+    )</code></pre>
 <div id="adt-treatment" class="section level4">
 <h4>ADT treatment</h4>
 <p>We want to figure out when is the first ADT date that is given. Lets
@@ -2032,13 +2106,24 @@ to add the treatment date.</p>
 ## • `` -&gt; `...65`</code></pre>
 <pre class="r"><code>dd &lt;- df_clin
 
+HCI_cID = c(dd$Sample1_HCI_Num, dd$Sample2_HCI_Num, dd$Sample3_HCI_Num)
+
 df_c &lt;- data.frame(
   mrn = dd$`MRN (UUHSC)`,
+  age = dd$Age_at_time_of_enrollment,
   HCI_cID = c(dd$Sample1_HCI_Num, dd$Sample2_HCI_Num, dd$Sample3_HCI_Num),
   date = c(dd$Sample1_date, dd$`Sample 2 Start date`, dd$`Sample3_Start date`),
   psa = c(dd$sample1_psa, dd$sample2_psa, dd$sample3_psa),
   ldh = c(dd$sample1_ldh, dd$sample2_ldh, dd$sample3_ldh),
   alk_phos = c(dd$sample1_alk_phos, dd$sample2_alk_phos, dd$sample3_alk_phos),
+  testo = c(dd$sample1_testos, dd$`Sample 2 Testos`, rep(NA, (length(HCI_cID) - length(c(dd$`sample1_testos`, dd$`Sample 2 Testos`)  ) ) )),
+  hemoGlo = c(dd$`Hemoglobin at s1`, rep(NA, (length(HCI_cID) - length(dd$`Hemoglobin at s1`)  ) )),
+    surgery_type = dd$Surgery_Type,
+  surgery_date = dd$Surgery_date,
+  radiation_type = dd$Radiation_Type,
+  radiation_date = dd$Radiation_date,
+  glsn_diag = dd$diag_glsn,
+  mets_stage = dd$`De-Novo Metastatic (Y/N)`,
   death_date = c(dd$`Death date`),
   death_status = dd$`Deceased?`,
   txt_nmcrpc_1st_type = dd$`1st_nmcrpc_rx`,
@@ -2047,15 +2132,37 @@ df_c &lt;- data.frame(
   txt_mcrpc_1st_date = dd$`1st_mcrpc_rx_date`,
   txt_mcrpc_2nd_type = dd$`2nd_mcrpc_rx`,
   txt_mcrpc_2nd_date = dd$`2nd_mcrpc_rx_date`
-) %&gt;% 
-  filter(!is.na(HCI_cID)) %&gt;% 
+) %&gt;%
+  filter(!is.na(HCI_cID)) %&gt;%
   mutate(
     cohort = &quot;C&quot;,
     psa = as.numeric(gsub(&quot;&lt;&quot;, &quot;&quot;, psa)),
     ldh = as.numeric(gsub(&quot;&lt;&quot;, &quot;&quot;, ldh)),
-    alk_phos = as.numeric(gsub(&quot;&lt;&quot;, &quot;&quot;, alk_phos))
-  ) %&gt;% 
-  filter(HCI_cID %in% df_hci_id$HCI_cID)</code></pre>
+    alk_phos = as.numeric(gsub(&quot;&lt;&quot;, &quot;&quot;, alk_phos)),
+    testo = as.numeric(gsub(&quot;&lt;&quot;, &quot;&quot;, testo))
+  ) %&gt;%
+  filter(HCI_cID %in% df_hci_id$HCI_cID) %&gt;% 
+  # Convert dates to Date type
+  mutate(
+    date = as.Date(date),
+    surgery_date = as.Date(surgery_date),
+    radiation_date = as.Date(radiation_date),
+    # Calculate days from treatment to sample (positive if treatment was before sample)
+    days_since_surgery = abs(as.numeric(difftime(date, surgery_date, units = &quot;days&quot;))),
+    days_since_radiation = abs(as.numeric(difftime(date, radiation_date, units = &quot;days&quot;))),
+    # Create sur_or_rad column: pick treatment that happened before sample and is closest to sample date
+    sur_or_rad = case_when(
+    # Both treatments happened before sample - pick the closer one (smaller time difference)
+    !is.na(days_since_surgery) &amp; days_since_surgery &gt; 0 &amp;
+    !is.na(days_since_radiation) &amp; days_since_radiation &gt; 0 ~
+    ifelse(days_since_surgery &lt; days_since_radiation, surgery_type, radiation_type),
+    # Only surgery happened before sample
+    !is.na(days_since_surgery) &amp; days_since_surgery &gt; 0 ~ surgery_type,
+    # Only radiation happened before sample
+    !is.na(days_since_radiation) &amp; days_since_radiation &gt; 0 ~ radiation_type,
+    # No treatment before sample
+    TRUE ~ NA_character_)
+    )</code></pre>
 <p>We want to figure out when is the first CRPC treatment is given.
 Regardless of what CRPC treatment was given</p>
 <pre class="r"><code># If any treatment is given, find the earliest and latest treatment date.
@@ -2144,10 +2251,10 @@ of all samples</p>
 <pre class="r"><code>d1 &lt;- df_a %&gt;% 
   mutate(txt_stat = &quot;Pre&quot;,
          time2txt = 0) 
-d2 &lt;- df_b3 %&gt;% select(mrn, HCI_cID, date, cohort, updated_adt_early, days_to_adt_early) %&gt;% 
+d2 &lt;- df_b3 %&gt;% select(mrn, age, HCI_cID, date, cohort, updated_adt_early, days_to_adt_early) %&gt;% 
   rename(txt_stat = updated_adt_early,
          time2txt= days_to_adt_early)
-d3 &lt;- df_c2 %&gt;% select(mrn, HCI_cID, date, cohort, mcrpc_status_early, days_to_mcrpc_early) %&gt;% 
+d3 &lt;- df_c2 %&gt;% select(mrn, age, HCI_cID, date, cohort, mcrpc_status_early, days_to_mcrpc_early) %&gt;% 
   rename(txt_stat = mcrpc_status_early,
          time2txt = days_to_mcrpc_early)
 
@@ -3005,6 +3112,66 @@ rect_data &lt;- data.frame(
 
 write.csv(swimmers_data, file.path(wd$outCurr, &quot;SwimmersData_cleaned.csv&quot;))
 
+# 10. All samples
+p_swimmers_ordered4 &lt;- ggplot(
+  swimmers_data,
+  aes(x = x_pos, y = y_pos)) +
+  geom_vline(
+    xintercept = c(0, 1, 2),
+    linetype = &quot;dashed&quot;,
+    color = &quot;grey50&quot;,
+    alpha = 0.5
+  ) +
+  geom_point(
+    aes(color = txt_stat_ordered),
+    size = 3,
+    shape = 16
+  ) +
+  geom_line(
+    aes(group = mrn),
+    color = &quot;grey50&quot;,
+    alpha = 0.5
+  ) +
+  # geom_text(
+  #   aes(label = time2txt),
+  #   vjust = -1,
+  #   size = 3
+  #) +
+  scale_x_continuous(
+    breaks = 0:2,
+    labels = c(&quot;Cohort A&quot;, &quot;Cohort B&quot;, &quot;Cohort C/D&quot;),
+    limits = c(-0.5, 2.5)
+  ) +
+  scale_color_manual(
+    values = c(
+      &quot;Pre1&quot; = &quot;steelblue&quot;, &quot;Pre2&quot; = &quot;steelblue&quot;, &quot;Pre3&quot; = &quot;red&quot;,
+      &quot;Post1&quot; = &quot;orange&quot;, &quot;Post2&quot; = &quot;orange&quot;, &quot;Post3&quot; = &quot;orange&quot;
+    )
+    #labels = c(&quot;Pre1&quot;, &quot;Pre2&quot;, &quot;Pre3&quot;, &quot;Post1&quot;, &quot;Post2&quot;, &quot;Post3&quot;)
+  ) +
+  labs(
+    x = &quot;&quot;,
+    y = &quot;Patient&quot;,
+    color = &quot;Sample Type&quot;
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = &quot;right&quot;
+  )
+
+ggsave(
+  p_swimmers_ordered4,
+  file = file.path(wd$outCurr, &quot;Sample_collection_timeline_ordered_noTime_cleaned.pdf&quot;),
+  height = 15,
+  width = 8,
+  limitsize = FALSE
+)
+
+
 # 11. Zommed section
 p_swimmers_ordered4 &lt;- ggplot(
   swimmers_data %&gt;% filter(!pattern %in% c(&quot;A&quot;, &quot;B_Pre_Only&quot;, &quot;B_Post_Only&quot;,
@@ -3026,11 +3193,11 @@ p_swimmers_ordered4 &lt;- ggplot(
     color = &quot;grey50&quot;,
     alpha = 0.5
   ) +
-  geom_text(
-    aes(label = time2txt),
-    vjust = -1,
-    size = 3
-  ) +
+  # geom_text(
+  #   aes(label = time2txt),
+  #   vjust = -1,
+  #   size = 3
+  #) +
   scale_x_continuous(
     breaks = 0:2,
     labels = c(&quot;Cohort A&quot;, &quot;Cohort B&quot;, &quot;Cohort C/D&quot;),
@@ -3064,8 +3231,6 @@ ggsave(
   width = 8,
   limitsize = FALSE
 )</code></pre>
-<pre><code>## Warning: Removed 7 rows containing missing values or values outside the scale range
-## (`geom_text()`).</code></pre>
 </div>
 <div id="bar-plot-v2" class="section level2">
 <h2>Bar plot v2</h2>
@@ -3142,9 +3307,393 @@ p_bar &lt;- ggplot(summary_data, aes(x = cohort, y = count, fill = metric)) +
 
 ggsave(p_bar, file=file.path(wd$outCurr, &quot;Patients_number_bar_clean.pdf&quot;), height = 5, width = 7)</code></pre>
 </div>
+<div id="swimmer-bar" class="section level2">
+<h2>Swimmer + bar</h2>
+<p>We used Claude to fix some of the plot</p>
+<pre class="r"><code>library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)  # For combining plots
+
+
+# Define pattern order with original names
+pattern_order_original &lt;- c(
+  &quot;A&quot;,
+  &quot;B_Pre_Only&quot;, &quot;B_Post_Only&quot;,
+  &quot;C_Pre_Only&quot;, &quot;C_Post_Only&quot;,
+  &quot;B_Serial_PrePost&quot;,
+  &quot;C_Serial_PrePost&quot;,
+  &quot;B_Pre_to_C_Pre&quot;,
+  &quot;B_Post_to_C_Post&quot;,
+  &quot;C_Post1_to_C_Post2&quot;,
+  &quot;B_Post_to_C_Pre&quot;,
+  &quot;C_Pre1_to_C_Pre2&quot;,
+  &quot;B_Pre1_to_B_Pre2&quot;,
+  &quot;B_Post_to_C_Pre_to_C_Post&quot;
+)
+
+# Create mapping for better labels
+pattern_labels &lt;- c(
+  &quot;A&quot; = &quot;Localized\nBaseline only&quot;,
+  
+  # Single timepoint patterns
+  &quot;B_Pre_Only&quot; = &quot;mHSPC\nPre-treatment only&quot;,
+  &quot;B_Post_Only&quot; = &quot;mHSPC\nPost-treatment only&quot;,
+  &quot;C_Pre_Only&quot; = &quot;mCRPC\nPre-treatment only&quot;,
+  &quot;C_Post_Only&quot; = &quot;mCRPC\nPost-treatment only&quot;,
+  
+  # Serial within same disease state
+  &quot;B_Serial_PrePost&quot; = &quot;mHSPC\nPre → Post treatment&quot;,
+  &quot;C_Serial_PrePost&quot; = &quot;mCRPC\nPre → Post treatment&quot;,
+  
+  # Cross-disease state patterns (Pre-treatment)
+  &quot;B_Pre_to_C_Pre&quot; = &quot;Pre-treatment\nmHSPC → mCRPC&quot;,
+  
+  # Cross-disease state patterns (Post-treatment)
+  &quot;B_Post_to_C_Post&quot; = &quot;Post-treatment\nmHSPC → mCRPC&quot;,
+  
+  # Multiple timepoints within disease state
+  &quot;C_Post1_to_C_Post2&quot; = &quot;mCRPC\nPost → Post (serial)&quot;,
+  &quot;C_Pre1_to_C_Pre2&quot; = &quot;mCRPC\nPre → Pre (serial)&quot;,
+  &quot;B_Pre1_to_B_Pre2&quot; = &quot;mHSPC\nPre → Pre (serial)&quot;,
+  
+  # Complex cross-disease patterns
+  &quot;B_Post_to_C_Pre&quot; = &quot;mHSPC Post →\nmCRPC Pre&quot;,
+  &quot;B_Post_to_C_Pre_to_C_Post&quot; = &quot;mHSPC Post →\nmCRPC Pre → Post&quot;
+)
+
+# Add any missing patterns with generic labels
+for (pattern in unique(swimmers_data$pattern)) {
+  if (!pattern %in% names(pattern_labels)) {
+    pattern_labels[pattern] = pattern
+  }
+}
+
+# Update cohort labels in the data
+swimmers_data &lt;- swimmers_data %&gt;%
+  mutate(
+    cohort_display = case_when(
+      cohort == &quot;A&quot; ~ &quot;Localized&quot;,
+      cohort == &quot;B&quot; ~ &quot;mHSPC&quot;,
+      cohort %in% c(&quot;C&quot;, &quot;D&quot;) ~ &quot;mCRPC&quot;,
+      TRUE ~ cohort
+    )
+  )
+
+# Create pattern factor with desired order
+swimmers_data$pattern &lt;- factor(swimmers_data$pattern, levels = pattern_order_original)
+
+# Count patients per pattern for spacing
+pattern_counts &lt;- swimmers_data %&gt;%
+  group_by(pattern) %&gt;%
+  summarise(n_patients = n_distinct(mrn)) %&gt;%
+  arrange(pattern)
+
+# INCREASED SPACING for better readability
+pattern_spacing &lt;- 3  # Increased from 1.5 to 3 for more separation
+
+# Create new y-positions grouped by pattern with more spacing
+swimmers_data &lt;- swimmers_data %&gt;%
+  arrange(pattern, mrn) %&gt;%
+  group_by(pattern) %&gt;%
+  mutate(
+    patient_within_pattern = as.numeric(factor(mrn)),
+    pattern_num = as.numeric(pattern)
+  ) %&gt;%
+  ungroup()
+
+# Recalculate grouped_y_pos with increased spacing
+pattern_positions &lt;- pattern_counts %&gt;%
+  mutate(
+    cumulative_patients = cumsum(n_patients),
+    pattern_y_start = lag(cumulative_patients, default = 0) + (row_number() - 1) * pattern_spacing,
+    pattern_y_end = pattern_y_start + n_patients - 1,
+    pattern_label = pattern_labels[as.character(pattern)]
+  )
+
+swimmers_data &lt;- swimmers_data %&gt;%
+  left_join(pattern_positions %&gt;% select(pattern, pattern_y_start), by = &quot;pattern&quot;) %&gt;%
+  mutate(grouped_y_pos = pattern_y_start + patient_within_pattern - 1)
+
+# Calculate sample counts for bar graph
+sample_counts &lt;- swimmers_data %&gt;%
+  mutate(
+    sample_type = case_when(
+      txt_stat_ordered %in% c(&quot;Pre1&quot;, &quot;Pre2&quot;, &quot;Pre3&quot;) ~ &quot;Pre&quot;,
+      txt_stat_ordered %in% c(&quot;Post1&quot;, &quot;Post2&quot;, &quot;Post3&quot;) ~ &quot;Post&quot;
+    )
+  ) %&gt;%
+  group_by(cohort_display, sample_type) %&gt;%
+  summarise(n_samples = n(), .groups = &quot;drop&quot;) %&gt;%
+  mutate(
+    x_pos = case_when(
+      cohort_display == &quot;Localized&quot; &amp; sample_type == &quot;Pre&quot; ~ -0.2,
+      cohort_display == &quot;Localized&quot; &amp; sample_type == &quot;Post&quot; ~ 0.2,
+      cohort_display == &quot;mHSPC&quot; &amp; sample_type == &quot;Pre&quot; ~ 0.8,
+      cohort_display == &quot;mHSPC&quot; &amp; sample_type == &quot;Post&quot; ~ 1.2,
+      cohort_display == &quot;mCRPC&quot; &amp; sample_type == &quot;Pre&quot; ~ 1.8,
+      cohort_display == &quot;mCRPC&quot; &amp; sample_type == &quot;Post&quot; ~ 2.2
+    )
+  )
+
+# Create the bar plot with fixed y-axis range
+p_bars &lt;- ggplot(sample_counts, aes(x = x_pos, y = n_samples)) +
+  geom_col(aes(fill = sample_type), width = 0.3, alpha = 0.7) +
+  geom_text(aes(label = n_samples), vjust = -0.5, size = 3.5, fontface = &quot;bold&quot;) +
+  scale_fill_manual(
+    values = c(&quot;Pre&quot; = &quot;steelblue&quot;, &quot;Post&quot; = &quot;orange&quot;),
+    name = &quot;Sample Type&quot;,
+    labels = c(&quot;Pre&quot; = &quot;Pre-treatment&quot;, &quot;Post&quot; = &quot;Post-treatment&quot;)
+  ) +
+  scale_x_continuous(
+    breaks = c(0, 1, 2),
+    labels = c(&quot;&quot;, &quot;&quot;, &quot;&quot;),  # Will add labels in main plot
+    limits = c(-0.5, 3.5)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),  # Fixed range 0-100
+    breaks = seq(0, 100, by = 20),
+    expand = c(0, 0)
+  ) +
+  labs(
+    x = &quot;&quot;,
+    y = &quot;Number of Samples&quot;,
+    title = &quot;Sample Distribution by Disease State and Treatment Status&quot;
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_line(color = &quot;grey90&quot;),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    legend.position = &quot;top&quot;,
+    legend.box = &quot;horizontal&quot;,
+    plot.margin = margin(t = 5, r = 5, b = 0, l = 5),
+    plot.title = element_text(size = 10, face = &quot;italic&quot;)
+  )
+
+# Create the main swimmer plot with better separation
+p_grouped &lt;- ggplot(swimmers_data, aes(x = x_pos, y = grouped_y_pos)) +
+  # Add alternating background rectangles for pattern groups
+  geom_rect(
+    data = pattern_positions[seq(1, nrow(pattern_positions), by = 2), ],
+    aes(xmin = -0.5, xmax = 2.5, 
+        ymin = pattern_y_start - 0.5, 
+        ymax = pattern_y_end + 0.5),
+    fill = &quot;grey95&quot;,
+    alpha = 0.5,
+    inherit.aes = FALSE
+  ) +
+  # Add shaded regions for disease states
+  annotate(&quot;rect&quot;, xmin = -0.5, xmax = 0.5, ymin = -Inf, ymax = Inf, 
+           fill = &quot;lightgreen&quot;, alpha = 0.05) +
+  annotate(&quot;rect&quot;, xmin = 0.5, xmax = 1.5, ymin = -Inf, ymax = Inf, 
+           fill = &quot;lightblue&quot;, alpha = 0.05) +
+  annotate(&quot;rect&quot;, xmin = 1.5, xmax = 2.5, ymin = -Inf, ymax = Inf, 
+           fill = &quot;lightyellow&quot;, alpha = 0.05) +
+  # Add vertical lines for cohorts
+  geom_vline(
+    xintercept = c(0.5, 1.5),
+    linetype = &quot;solid&quot;,
+    color = &quot;grey70&quot;,
+    alpha = 0.5,
+    size = 0.5
+  ) +
+  # Add THICKER horizontal lines to separate pattern groups
+  geom_hline(
+    data = data.frame(y = pattern_positions$pattern_y_start[-1] - pattern_spacing/2),
+    aes(yintercept = y),
+    linetype = &quot;solid&quot;,
+    color = &quot;grey50&quot;,
+    alpha = 0.8,
+    size = 1  # Thicker lines for better separation
+  ) +
+  # Add connecting lines for each patient
+  geom_line(
+    aes(group = mrn),
+    color = &quot;grey50&quot;,
+    alpha = 0.5
+  ) +
+  # Add points colored by sample type
+  geom_point(
+    aes(color = txt_stat_ordered),
+    size = 2.5,
+    shape = 16
+  ) +
+  # Add pattern group labels with boxes
+  geom_rect(
+    data = pattern_positions,
+    aes(xmin = 2.6, xmax = 3.4,
+        ymin = pattern_y_start + (n_patients - 1) / 2 - 0.8,
+        ymax = pattern_y_start + (n_patients - 1) / 2 + 0.8),
+    fill = &quot;white&quot;,
+    color = &quot;grey60&quot;,
+    size = 0.5,
+    inherit.aes = FALSE
+  ) +
+  geom_text(
+    data = pattern_positions,
+    aes(x = 3, y = pattern_y_start + (n_patients - 1) / 2,
+        label = pattern_label),
+    size = 2.8,
+    hjust = 0.5,
+    inherit.aes = FALSE
+  ) +
+  # Color scale
+  scale_color_manual(
+    values = c(
+      &quot;Pre1&quot; = &quot;steelblue&quot;, 
+      &quot;Pre2&quot; = &quot;steelblue&quot;, 
+      &quot;Pre3&quot; = &quot;red&quot;,
+      &quot;Post1&quot; = &quot;orange&quot;, 
+      &quot;Post2&quot; = &quot;orange&quot;, 
+      &quot;Post3&quot; = &quot;orange&quot;
+    ),
+    name = &quot;Sample Type&quot;,
+    labels = c(
+      &quot;Pre1&quot; = &quot;Pre-treatment 1&quot;, 
+      &quot;Pre2&quot; = &quot;Pre-treatment 2&quot;, 
+      &quot;Pre3&quot; = &quot;Pre-treatment 3 (special)&quot;,
+      &quot;Post1&quot; = &quot;Post-treatment 1&quot;, 
+      &quot;Post2&quot; = &quot;Post-treatment 2&quot;, 
+      &quot;Post3&quot; = &quot;Post-treatment 3&quot;
+    )
+  ) +
+  # X-axis setup
+  scale_x_continuous(
+    breaks = 0:2,
+    labels = c(&quot;Localized&quot;, &quot;mHSPC&quot;, &quot;mCRPC&quot;),
+    limits = c(-0.5, 3.5)
+  ) +
+  # Y-axis setup
+  scale_y_continuous(
+    trans = &quot;reverse&quot;,  # Invert y-axis
+    breaks = pattern_positions$pattern_y_start + pattern_positions$n_patients/2,
+    labels = rep(&quot;&quot;, nrow(pattern_positions)),  # Remove y-axis labels since we have boxes
+    sec.axis = sec_axis(
+      ~.,
+      breaks = pattern_positions$pattern_y_start + pattern_positions$n_patients/2,
+      labels = paste0(&quot;(n=&quot;, pattern_positions$n_patients, &quot;)&quot;)
+    )
+  ) +
+  # Labels
+  labs(
+    x = &quot;Disease State&quot;,
+    y = &quot;&quot;,
+    color = &quot;Sample Type&quot;
+  ) +
+  # Theme
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y.right = element_text(size = 7, color = &quot;grey40&quot;),
+    axis.text.x = element_text(size = 11, face = &quot;bold&quot;),
+    axis.title.x = element_text(size = 11, face = &quot;bold&quot;),
+    legend.position = &quot;right&quot;,
+    plot.margin = margin(t = 0, r = 5, b = 5, l = 5),
+    panel.border = element_rect(color = &quot;grey50&quot;, size = 1)
+  ) +
+  coord_cartesian(clip = &quot;off&quot;)  # Allow drawing outside plot area</code></pre>
+<pre><code>## Warning: Using `size` aesthetic for lines was deprecated in ggplot2 3.4.0.
+## ℹ Please use `linewidth` instead.
+## This warning is displayed once every 8 hours.
+## Call `lifecycle::last_lifecycle_warnings()` to see where this warning was
+## generated.</code></pre>
+<pre><code>## Warning: The `size` argument of `element_rect()` is deprecated as of ggplot2 3.4.0.
+## ℹ Please use the `linewidth` argument instead.
+## This warning is displayed once every 8 hours.
+## Call `lifecycle::last_lifecycle_warnings()` to see where this warning was
+## generated.</code></pre>
+<pre class="r"><code># Combine the plots using patchwork
+combined_plot &lt;- p_bars / p_grouped + 
+  plot_layout(heights = c(1, 5)) + 
+  plot_annotation(
+    title = &quot;Sample Collection Timeline - Grouped by Pattern&quot;,
+    subtitle = &quot;Disease progression from Localized → mHSPC (metastatic Hormone-Sensitive) → mCRPC (metastatic Castration-Resistant)&quot;,
+    theme = theme(
+      plot.title = element_text(face = &quot;bold&quot;, size = 14),
+      plot.subtitle = element_text(size = 10, face = &quot;italic&quot;, color = &quot;grey40&quot;)
+    )
+  )
+
+# Save the combined plot
+ggsave(
+  combined_plot,
+  file=file.path(wd$outCurr, &quot;swimmers_plot_improved_spacing.pdf&quot;),
+  height = 18,  # Increased height for better spacing
+  width = 12,
+  limitsize = FALSE
+)</code></pre>
+<pre><code>## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;Pre → Post treatment&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for → (U+2192)</code></pre>
+<pre><code>## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;Pre → Post treatment&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for → (U+2192)</code></pre>
+<pre><code>## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;mHSPC → mCRPC&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for → (U+2192)
+## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;mHSPC → mCRPC&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for → (U+2192)</code></pre>
+<pre><code>## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;Post → Post (serial)&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for → (U+2192)</code></pre>
+<pre><code>## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;mHSPC Post →&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for → (U+2192)
+## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;mHSPC Post →&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for → (U+2192)</code></pre>
+<pre><code>## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;mCRPC Pre → Post&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for → (U+2192)</code></pre>
+<pre><code>## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;Disease progression from Localized → mHSPC (metastatic Hormone-Sensitive)
+## → mCRPC (metastatic Castration-Resistant)&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for
+## → (U+2192)
+## Warning in grid.Call.graphics(C_text, as.graphicsAnnot(x$label), x$x, x$y, :
+## for &#39;Disease progression from Localized → mHSPC (metastatic Hormone-Sensitive)
+## → mCRPC (metastatic Castration-Resistant)&#39; in &#39;mbcsToSbcs&#39;: -&gt; substituted for
+## → (U+2192)</code></pre>
+</div>
 <div id="sample-number" class="section level2">
 <h2>Sample number</h2>
 <p>Lets get the sample numbers</p>
+<pre class="r"><code># Calculate total number of samples and patients for all cohorts (regardless of cohort)
+n_total_samples &lt;- df_meta_f4 %&gt;% pull(HCI_cID) %&gt;% unique() %&gt;% length()
+n_total_patients &lt;- df_meta_f4 %&gt;% pull(mrn) %&gt;% unique() %&gt;% length()
+
+# Calculate total number of samples and patients for Cohorts A, B, and C (regardless of treatment)
+n_a_samples &lt;- df_meta_f4 %&gt;% filter(cohort == &quot;A&quot;) %&gt;% pull(HCI_cID) %&gt;% unique() %&gt;% length()
+n_a_patients &lt;- df_meta_f4 %&gt;% filter(cohort == &quot;A&quot;) %&gt;% pull(mrn) %&gt;% unique() %&gt;% length()
+
+n_b_samples &lt;- df_meta_f4 %&gt;% filter(cohort == &quot;B&quot;) %&gt;% pull(HCI_cID) %&gt;% unique() %&gt;% length()
+n_b_patients &lt;- df_meta_f4 %&gt;% filter(cohort == &quot;B&quot;) %&gt;% pull(mrn) %&gt;% unique() %&gt;% length()
+
+n_c_samples &lt;- df_meta_f4 %&gt;% filter(cohort == &quot;C&quot;) %&gt;% pull(HCI_cID) %&gt;% unique() %&gt;% length()
+n_c_patients &lt;- df_meta_f4 %&gt;% filter(cohort == &quot;C&quot;) %&gt;% pull(mrn) %&gt;% unique() %&gt;% length()
+
+cat(&quot;All cohorts:\n&quot;)</code></pre>
+<pre><code>## All cohorts:</code></pre>
+<pre class="r"><code>cat(&quot;  Total samples:&quot;, n_total_samples, &quot;\n&quot;)</code></pre>
+<pre><code>##   Total samples: 302</code></pre>
+<pre class="r"><code>cat(&quot;  Total patients:&quot;, n_total_patients, &quot;\n\n&quot;)</code></pre>
+<pre><code>##   Total patients: 216</code></pre>
+<pre class="r"><code>cat(&quot;Cohort A:\n&quot;)</code></pre>
+<pre><code>## Cohort A:</code></pre>
+<pre class="r"><code>cat(&quot;  Total samples:&quot;, n_a_samples, &quot;\n&quot;)</code></pre>
+<pre><code>##   Total samples: 32</code></pre>
+<pre class="r"><code>cat(&quot;  Total patients:&quot;, n_a_patients, &quot;\n\n&quot;)</code></pre>
+<pre><code>##   Total patients: 32</code></pre>
+<pre class="r"><code>cat(&quot;Cohort B:\n&quot;)</code></pre>
+<pre><code>## Cohort B:</code></pre>
+<pre class="r"><code>cat(&quot;  Total samples:&quot;, n_b_samples, &quot;\n&quot;)</code></pre>
+<pre><code>##   Total samples: 118</code></pre>
+<pre class="r"><code>cat(&quot;  Total patients:&quot;, n_b_patients, &quot;\n\n&quot;)</code></pre>
+<pre><code>##   Total patients: 93</code></pre>
+<pre class="r"><code>cat(&quot;Cohort C:\n&quot;)</code></pre>
+<pre><code>## Cohort C:</code></pre>
+<pre class="r"><code>cat(&quot;  Total samples:&quot;, n_c_samples, &quot;\n&quot;)</code></pre>
+<pre><code>##   Total samples: 152</code></pre>
+<pre class="r"><code>cat(&quot;  Total patients:&quot;, n_c_patients, &quot;\n\n&quot;)</code></pre>
+<pre><code>##   Total patients: 119</code></pre>
 <pre class="r"><code># Calculate number of Pre and Post samples and patients for Cohort B and C using df_meta_f4
 
 # For Cohort B
@@ -3159,8 +3708,8 @@ n_post_c_samples &lt;- df_meta_f4 %&gt;% filter(cohort == &quot;C&quot;, txt_sta
 n_pre_c_patients &lt;- df_meta_f4 %&gt;% filter(cohort == &quot;C&quot;, txt_stat %in% c(&quot;Pre&quot;, &quot;Pre1&quot;, &quot;Pre2&quot;, &quot;Pre3&quot;)) %&gt;% pull(mrn) %&gt;% unique() %&gt;% length()
 n_post_c_patients &lt;- df_meta_f4 %&gt;% filter(cohort == &quot;C&quot;, txt_stat %in% c(&quot;Post&quot;, &quot;Post1&quot;, &quot;Post2&quot;, &quot;Post3&quot;)) %&gt;% pull(mrn) %&gt;% unique() %&gt;% length()
 
-cat(&quot;B cohort:\n&quot;)</code></pre>
-<pre><code>## B cohort:</code></pre>
+cat(&quot;B cohort (by treatment):\n&quot;)</code></pre>
+<pre><code>## B cohort (by treatment):</code></pre>
 <pre class="r"><code>cat(&quot;  Pre samples:&quot;, n_pre_b_samples, &quot;\n&quot;)</code></pre>
 <pre><code>##   Pre samples: 64</code></pre>
 <pre class="r"><code>cat(&quot;  Post samples:&quot;, n_post_b_samples, &quot;\n&quot;)</code></pre>
@@ -3169,8 +3718,8 @@ cat(&quot;B cohort:\n&quot;)</code></pre>
 <pre><code>##   Pre patients: 64</code></pre>
 <pre class="r"><code>cat(&quot;  Post patients:&quot;, n_post_b_patients, &quot;\n\n&quot;)</code></pre>
 <pre><code>##   Post patients: 54</code></pre>
-<pre class="r"><code>cat(&quot;C cohort:\n&quot;)</code></pre>
-<pre><code>## C cohort:</code></pre>
+<pre class="r"><code>cat(&quot;C cohort (by treatment):\n&quot;)</code></pre>
+<pre><code>## C cohort (by treatment):</code></pre>
 <pre class="r"><code>cat(&quot;  Pre samples:&quot;, n_pre_c_samples, &quot;\n&quot;)</code></pre>
 <pre><code>##   Pre samples: 69</code></pre>
 <pre class="r"><code>cat(&quot;  Post samples:&quot;, n_post_c_samples, &quot;\n&quot;)</code></pre>
@@ -3179,6 +3728,153 @@ cat(&quot;B cohort:\n&quot;)</code></pre>
 <pre><code>##   Pre patients: 69</code></pre>
 <pre class="r"><code>cat(&quot;  Post patients:&quot;, n_post_c_patients, &quot;\n&quot;)</code></pre>
 <pre><code>##   Post patients: 60</code></pre>
+</div>
+</div>
+<div id="objective-4-table" class="section level1">
+<h1>Objective 4: Table</h1>
+<p>We want to get additional information about the cohorts to make a
+supplemental table. But we only select those that pass the final
+selection</p>
+<div id="cohort-a-1" class="section level2">
+<h2>Cohort A</h2>
+<pre class="r"><code># Age
+summary(df_a2$age)</code></pre>
+<pre><code>##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##   50.00   62.75   66.50   67.31   71.25   85.00</code></pre>
+<pre class="r"><code># Prostate treatment
+df_a2 &lt;- df_a2 %&gt;% 
+  mutate(sur_or_rad = case_when(
+    str_detect(sur_or_rad, &quot;^Surgery&quot;) ~ &quot;Surgery&quot;,
+    str_detect(sur_or_rad, &quot;^Radiation&quot;) ~ &quot;Radiation&quot;,
+    TRUE ~ sur_or_rad))
+  
+# Display table with percentages for sur_or_rad
+tbl &lt;- table(df_a2$sur_or_rad, useNA = &quot;ifany&quot;)
+setNames(paste0(tbl, &quot; [&quot;, round(prop.table(tbl) * 100, 1), &quot;%]&quot;), names(tbl))</code></pre>
+<pre><code>##    Radiation      Surgery         &lt;NA&gt; 
+##    &quot;8 [25%]&quot; &quot;22 [68.8%]&quot;   &quot;2 [6.2%]&quot;</code></pre>
+<pre class="r"><code># Display table with percentages
+tbl &lt;- table(case_when(is.na(df_a2$glsn_diag) ~ &quot;Missing&quot;, df_a2$glsn_diag &lt; 8 ~ &quot;&lt;8&quot;, df_a2$glsn_diag &gt;= 8 ~ &quot;&gt;=8&quot;))
+setNames(paste0(tbl, &quot; [&quot;, round(prop.table(tbl) * 100, 1), &quot;%]&quot;), names(tbl))</code></pre>
+<pre><code>##           &lt;8          &gt;=8 
+## &quot;20 [62.5%]&quot; &quot;12 [37.5%]&quot;</code></pre>
+<pre class="r"><code># 1st PSA
+summary(df_a2$psa)</code></pre>
+<pre><code>##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA&#39;s 
+##   0.010   0.100   0.550   6.514   7.450  38.100       6</code></pre>
+</div>
+<div id="cohort-b-1" class="section level2">
+<h2>Cohort B</h2>
+<pre class="r"><code># Since they are serials, we need to get the unique mrns
+
+# Age
+d1 &lt;- df_b3 %&gt;% dplyr::select(mrn, age) %&gt;% distinct()
+dim(d1)</code></pre>
+<pre><code>## [1] 93  2</code></pre>
+<pre class="r"><code>summary(d1$age)</code></pre>
+<pre><code>##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##   50.00   64.00   68.00   69.13   75.00   92.00</code></pre>
+<pre class="r"><code># Prostate treatment
+df_b3 &lt;- df_b3 %&gt;% 
+  mutate(sur_or_rad = case_when(
+    str_detect(sur_or_rad, &quot;^Surgery&quot;) ~ &quot;Surgery&quot;,
+    str_detect(sur_or_rad, &quot;^Radiation&quot;) ~ &quot;Radiation&quot;,
+    TRUE ~ sur_or_rad))
+d1 &lt;- df_b3 %&gt;% dplyr::select(mrn, age, sur_or_rad) %&gt;% distinct()
+dim(d1)</code></pre>
+<pre><code>## [1] 93  3</code></pre>
+<pre class="r"><code># Display table with percentages for sur_or_rad
+tbl &lt;- table(d1$sur_or_rad, useNA = &quot;ifany&quot;)
+setNames(paste0(tbl, &quot; [&quot;, round(prop.table(tbl) * 100, 1), &quot;%]&quot;), names(tbl))</code></pre>
+<pre><code>##    Radiation      Surgery         &lt;NA&gt; 
+## &quot;41 [44.1%]&quot; &quot;12 [12.9%]&quot;   &quot;40 [43%]&quot;</code></pre>
+<pre class="r"><code># Gleason
+d1 &lt;- df_b3 %&gt;% 
+  group_by(mrn) %&gt;%
+  slice_min(date, n = 1) %&gt;%
+  ungroup()
+# Display table with percentages
+tbl &lt;- table(case_when(is.na(d1$glsn_diag) ~ &quot;Missing&quot;, d1$glsn_diag &lt; 8 ~ &quot;&lt;8&quot;, d1$glsn_diag &gt;= 8 ~ &quot;&gt;=8&quot;))
+setNames(paste0(tbl, &quot; [&quot;, round(prop.table(tbl) * 100, 1), &quot;%]&quot;), names(tbl))</code></pre>
+<pre><code>##           &lt;8          &gt;=8      Missing 
+## &quot;34 [36.6%]&quot; &quot;54 [58.1%]&quot;   &quot;5 [5.4%]&quot;</code></pre>
+<pre class="r"><code># 1st PSA
+summary(d1$psa)</code></pre>
+<pre><code>##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##    0.01    0.70    4.30   51.00   27.30 1401.80</code></pre>
+<pre class="r"><code># Find PSA of those serially sampeled
+mrn_pre_post &lt;- df_meta_f4 %&gt;%
+  filter(cohort == &quot;B&quot;) %&gt;% 
+  group_by(mrn) %&gt;%
+  summarise(
+    has_pre = as.integer(any(txt_stat == &quot;Pre&quot;, na.rm = TRUE)),
+    has_post = as.integer(any(txt_stat == &quot;Post&quot;, na.rm = TRUE))
+  )
+
+# View only those with both Pre and Post
+paired_mrn &lt;- mrn_pre_post %&gt;%
+  filter(has_pre == 1 &amp; has_post == 1)
+dim(paired_mrn)</code></pre>
+<pre><code>## [1] 25  3</code></pre>
+<pre class="r"><code># PSA pre
+d2 &lt;- df_meta_f4 %&gt;% filter(mrn %in% paired_mrn$mrn) %&gt;% 
+  filter(cohort == &quot;B&quot; &amp; txt_stat == &quot;Pre&quot;)
+d3 &lt;- df_b3 %&gt;% filter(HCI_cID %in% d2$HCI_cID)
+summary(d3$psa)</code></pre>
+<pre><code>##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##    1.00    3.80   12.20   85.02   36.20 1401.80</code></pre>
+<pre class="r"><code># PSA post
+d2 &lt;- df_meta_f4 %&gt;% filter(mrn %in% paired_mrn$mrn) %&gt;% 
+  filter(cohort == &quot;B&quot; &amp; txt_stat == &quot;Post&quot;)
+
+# Now get the PSA
+d3 &lt;- df_b3 %&gt;% filter(HCI_cID %in% d2$HCI_cID)
+summary(d3$psa)</code></pre>
+<pre><code>##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##     0.1     0.1     0.3     4.6     1.1    33.2</code></pre>
+</div>
+<div id="cohort-c-1" class="section level2">
+<h2>Cohort C</h2>
+<pre class="r"><code># Age
+d1 &lt;- df_c2 %&gt;% dplyr::select(mrn, age) %&gt;% distinct()
+dim(d1)</code></pre>
+<pre><code>## [1] 119   2</code></pre>
+<pre class="r"><code>summary(d1$age)</code></pre>
+<pre><code>##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+##   50.00   65.00   71.00   70.18   75.50   91.00</code></pre>
+<pre class="r"><code># Prostate treatment
+df_c2 &lt;- df_c2 %&gt;% 
+  mutate(sur_or_rad = case_when(
+    str_detect(sur_or_rad, &quot;^Surgery&quot;) ~ &quot;Surgery&quot;,
+    str_detect(sur_or_rad, &quot;^Radiation&quot;) ~ &quot;Radiation&quot;,
+    TRUE ~ sur_or_rad))
+d1 &lt;- df_c2 %&gt;% 
+  filter(!HCI_cID == &quot;2022-0449&quot;) %&gt;% 
+  dplyr::select(mrn, age, sur_or_rad) %&gt;% distinct()
+dim(d1)</code></pre>
+<pre><code>## [1] 119   3</code></pre>
+<pre class="r"><code># We got 120, one more because a patient - 2021-4689 and 2022-0449 has both surgery and radiation
+# Surgery was more recent - so we take that
+#d1 &lt;- d1 %&gt;% filter(!HCI_cID == &quot;2022-0449&quot;)
+# Display table with percentages for sur_or_rad
+tbl &lt;- table(d1$sur_or_rad, useNA = &quot;ifany&quot;)
+setNames(paste0(tbl, &quot; [&quot;, round(prop.table(tbl) * 100, 1), &quot;%]&quot;), names(tbl))</code></pre>
+<pre><code>##    Radiation      Surgery         &lt;NA&gt; 
+## &quot;74 [62.2%]&quot;   &quot;19 [16%]&quot; &quot;26 [21.8%]&quot;</code></pre>
+<pre class="r"><code># Gleason
+d1 &lt;- df_c2 %&gt;% 
+  group_by(mrn) %&gt;%
+  slice_min(date, n = 1) %&gt;%
+  ungroup()
+# Display table with percentages
+tbl &lt;- table(case_when(is.na(d1$glsn_diag) ~ &quot;Missing&quot;, d1$glsn_diag &lt; 8 ~ &quot;&lt;8&quot;, d1$glsn_diag &gt;= 8 ~ &quot;&gt;=8&quot;))
+setNames(paste0(tbl, &quot; [&quot;, round(prop.table(tbl) * 100, 1), &quot;%]&quot;), names(tbl))</code></pre>
+<pre><code>##           &lt;8          &gt;=8      Missing 
+##   &quot;50 [42%]&quot; &quot;64 [53.8%]&quot;   &quot;5 [4.2%]&quot;</code></pre>
+<pre class="r"><code># 1st PSA
+summary(d1$psa)</code></pre>
+<pre><code>##    Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA&#39;s 
+##    0.10    2.50    6.50   55.71   18.12 1863.60       1</code></pre>
 </div>
 </div>
 <div id="save-objects" class="section level1">
